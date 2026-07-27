@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
-import os
+import sys
 
 import pytest
 
@@ -274,6 +274,116 @@ def test_write_is_atomic_leaving_no_temp_files(fake_store):
     target = ds.entry_to_credentials(ds.parse_token_cache(make_payload(org=ORG_B)))
     ds.write_active_credentials(target, account_uuid="u")
     assert not list(fake_store.glob("*.tmp"))
+
+
+# -- DPAPI wrapping for at-rest storage outside the app -------------------
+#
+# Storing a login as the *app's* ciphertext is not durable: a build migration
+# re-encrypted the store under a different key on 2026-07-27 and stranded
+# everything held that way. cswap therefore keeps the decrypted credential
+# wrapped with the user's own DPAPI key, independent of the app's rotations.
+
+windows_only = pytest.mark.skipif(
+    sys.platform != "win32", reason="DPAPI is a Windows API"
+)
+
+
+@windows_only
+def test_protect_credentials_round_trips():
+    creds = ds.entry_to_credentials(ds.parse_token_cache(make_payload()))
+    assert ds.unprotect_credentials(ds.protect_credentials(creds)) == creds
+
+
+@windows_only
+def test_protect_credentials_does_not_store_plaintext():
+    """The wrapped blob must not carry the token in the clear."""
+    creds = ds.entry_to_credentials(ds.parse_token_cache(make_payload(token="tok-secret")))
+    assert b"tok-secret" not in ds.protect_credentials(creds)
+
+
+@windows_only
+def test_protected_blob_survives_an_app_rekey():
+    """DPAPI wrapping is independent of the app's OSCrypt key by construction."""
+    creds = ds.entry_to_credentials(ds.parse_token_cache(make_payload()))
+    blob = ds.protect_credentials(creds)
+    # Whatever the app does to its own key, ours is untouched.
+    assert ds.unprotect_credentials(blob) == creds
+
+
+@windows_only
+def test_unprotect_rejects_garbage():
+    with pytest.raises(ds.DesktopStoreError):
+        ds.unprotect_credentials(b"not a dpapi blob")
+
+
+# -- running-app probe ----------------------------------------------------
+#
+# The probe shells out to tasklist, which writes in the console's OEM code page
+# — not the ANSI one Python decodes with under text=True. Decoding there raised
+# inside subprocess's reader thread and left stdout as None, which the probe then
+# dereferenced. It now matches raw bytes and treats every inconclusive outcome as
+# "not running".
+
+
+@pytest.fixture
+def on_windows(monkeypatch):
+    from claude_swap.models import Platform
+
+    monkeypatch.setattr(Platform, "detect", classmethod(lambda cls: Platform.WINDOWS))
+
+
+def fake_tasklist(monkeypatch, *, stdout, returncode=0, raises=None):
+    import subprocess
+
+    def run(*args, **kwargs):
+        if raises is not None:
+            raise raises
+        assert "text" not in kwargs, "probe must not decode; tasklist is OEM-encoded"
+        return subprocess.CompletedProcess(args, returncode, stdout, b"")
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+
+def test_probe_detects_a_running_app(on_windows, monkeypatch):
+    fake_tasklist(monkeypatch, stdout=b"claude.exe   1234 Console   1   350.000 K\r\n")
+    assert ds.desktop_app_running() is True
+
+
+def test_probe_survives_oem_encoded_output(on_windows, monkeypatch):
+    """0x81 is undecodable as cp1252 — the regression that crashed the probe."""
+    fake_tasklist(
+        monkeypatch,
+        stdout=b"claude.exe  1234 Konsole\x81  1  350.000 K\r\n",
+    )
+    assert ds.desktop_app_running() is True
+
+
+def test_probe_reports_not_running_on_empty_match(on_windows, monkeypatch):
+    fake_tasklist(monkeypatch, stdout=b"INFO: No tasks are running.\r\n")
+    assert ds.desktop_app_running() is False
+
+
+def test_probe_fails_safe_on_none_stdout(on_windows, monkeypatch):
+    """A reader-thread failure yields None; that must not raise."""
+    fake_tasklist(monkeypatch, stdout=None)
+    assert ds.desktop_app_running() is False
+
+
+def test_probe_fails_safe_on_nonzero_exit(on_windows, monkeypatch):
+    fake_tasklist(monkeypatch, stdout=b"claude.exe", returncode=1)
+    assert ds.desktop_app_running() is False
+
+
+def test_probe_fails_safe_when_tasklist_is_missing(on_windows, monkeypatch):
+    fake_tasklist(monkeypatch, stdout=None, raises=OSError("not found"))
+    assert ds.desktop_app_running() is False
+
+
+def test_probe_is_false_off_windows(monkeypatch):
+    from claude_swap.models import Platform
+
+    monkeypatch.setattr(Platform, "detect", classmethod(lambda cls: Platform.LINUX))
+    assert ds.desktop_app_running() is False
 
 
 # -- platform guards ------------------------------------------------------

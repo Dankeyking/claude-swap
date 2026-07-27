@@ -9,9 +9,13 @@ Run it from an ordinary terminal while the app is closed.
     uv run python scripts/desktop_e2e.py activate A
     uv run python scripts/desktop_e2e.py list
 
-Snapshots are verbatim copies of the app's own config.json -- still encrypted,
-so no plaintext token is ever written. They live outside the repository, in
-~/.claude-swap-backup/desktop-e2e/.
+A snapshot stores the *decrypted* login, re-wrapped with the current user's
+DPAPI key -- deliberately not a copy of the app's own ciphertext. An app build
+migration re-encrypted the store under a different key on 2026-07-27, which
+stranded every snapshot taken as ciphertext; storing the credential instead
+survives that, and mirrors what the real integration does (decrypt on add,
+re-encrypt with the then-current key on switch). Snapshots live outside the
+repository, in ~/.claude-swap-backup/desktop-e2e/.
 
 Token values are never printed; only sha256 fingerprints, so two runs can be
 compared without revealing anything.
@@ -37,7 +41,7 @@ def fp(value: str) -> str:
 
 
 def _snapshot_paths(label: str) -> tuple[pathlib.Path, pathlib.Path]:
-    return SNAP_DIR / f"config.{label}.json", SNAP_DIR / f"account.{label}.json"
+    return SNAP_DIR / f"cred.{label}.dpapi", SNAP_DIR / f"account.{label}.json"
 
 
 def _describe(entry: ds.TokenCacheEntry, indent: str = "  ") -> None:
@@ -75,30 +79,35 @@ def _read_oauth_account() -> dict:
 
 
 def cmd_snapshot(label: str) -> int:
-    """Copy the live store aside under ``label``."""
+    """Store the live login under ``label``, decrypted and DPAPI-re-wrapped."""
+    credentials = ds.read_active_credentials()
+    if not credentials:
+        print(f"Kein Login im Store — Snapshot '{label}' nicht angelegt.")
+        return 1
+
     SNAP_DIR.mkdir(parents=True, exist_ok=True)
-    config_dst, account_dst = _snapshot_paths(label)
-    shutil.copy2(ds.get_desktop_config_path(), config_dst)
+    cred_dst, account_dst = _snapshot_paths(label)
+    cred_dst.write_bytes(ds.protect_credentials(credentials))
     acct = _read_oauth_account()
     account_dst.write_text(json.dumps(acct, indent=2), encoding="utf-8")
 
-    entries = ds.read_entries()
-    if not entries:
-        print(f"WARNUNG: Snapshot '{label}' enthaelt keinen Login.")
-        return 1
-    entry = entries.get("oauth:tokenCacheV2") or next(iter(entries.values()))
+    entry = ds.credentials_to_entry(credentials)
     print(f"Snapshot '{label}' gespeichert:")
     print(f"  E-Mail           : {acct.get('emailAddress')}")
     print(f"  accountUuid      : {acct.get('accountUuid')}")
     _describe(entry)
-    return 0
+
+    # Prove it reads back before the user relies on it.
+    roundtrip = ds.unprotect_credentials(cred_dst.read_bytes())
+    print(f"  Rueckleseprobe   : {'OK' if roundtrip == credentials else 'FEHLGESCHLAGEN'}")
+    return 0 if roundtrip == credentials else 1
 
 
 def cmd_activate(label: str) -> int:
     """Write the snapshot's login into the live store via the real write path."""
-    config_src, account_src = _snapshot_paths(label)
-    if not config_src.exists():
-        print(f"Kein Snapshot '{label}' unter {config_src}")
+    cred_src, account_src = _snapshot_paths(label)
+    if not cred_src.exists():
+        print(f"Kein Snapshot '{label}' unter {cred_src}")
         return 1
 
     if ds.desktop_app_running():
@@ -108,14 +117,7 @@ def cmd_activate(label: str) -> int:
         )
         return 1
 
-    # Read the snapshot through the module by pointing it at the snapshot dir.
-    live_config_path = ds.get_desktop_config_path
-    ds.get_desktop_config_path = lambda: config_src  # type: ignore[assignment]
-    try:
-        credentials = ds.read_active_credentials()
-    finally:
-        ds.get_desktop_config_path = live_config_path  # type: ignore[assignment]
-
+    credentials = ds.unprotect_credentials(cred_src.read_bytes())
     if not credentials:
         print(f"Snapshot '{label}' enthaelt keinen Login.")
         return 1
@@ -177,7 +179,7 @@ def cmd_list() -> int:
     if not SNAP_DIR.exists():
         print("Noch keine Snapshots.")
         return 0
-    labels = sorted(p.name[len("config."):-len(".json")] for p in SNAP_DIR.glob("config.*.json"))
+    labels = sorted(p.name[len("cred."):-len(".dpapi")] for p in SNAP_DIR.glob("cred.*.dpapi"))
     if not labels:
         print("Noch keine Snapshots.")
         return 0

@@ -167,9 +167,14 @@ def desktop_app_running() -> bool:
 
     Best-effort and deliberately conservative in the *unknown* direction: an
     inconclusive probe reports ``False`` (not running) so a missing/blocked
-    tasklist can't make switching permanently impossible. The write path pairs
-    this with a post-write verification read, which catches a clobber the probe
-    missed.
+    tasklist can't make switching permanently impossible.
+
+    Deliberately byte-oriented. ``tasklist`` writes in the console's OEM code
+    page (850/437 on a German install), which is *not* the ANSI code page Python
+    would decode with under ``text=True`` — a process list carrying an umlaut
+    then raises UnicodeDecodeError inside subprocess's reader thread and leaves
+    ``stdout`` as None. The needle is pure ASCII, so matching raw bytes sidesteps
+    the whole encoding question rather than guessing a code page.
     """
     if Platform.detect() != Platform.WINDOWS:
         return False
@@ -179,14 +184,18 @@ def desktop_app_running() -> bool:
         out = subprocess.run(
             ["tasklist", "/FI", f"IMAGENAME eq {_DESKTOP_PROCESS_NAME}", "/NH"],
             capture_output=True,
-            text=True,
             timeout=10,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.SubprocessError) as e:
         _logger.debug("Could not probe for a running desktop app: %s", e)
         return False
-    return _DESKTOP_PROCESS_NAME.lower() in out.stdout.lower()
+    if out.returncode != 0 or not out.stdout:
+        # A filtered tasklist that matches nothing still exits 0 with a notice,
+        # so a non-zero code or empty capture means the probe itself failed.
+        _logger.debug("Desktop-app probe inconclusive (rc=%s)", out.returncode)
+        return False
+    return _DESKTOP_PROCESS_NAME.encode("ascii") in out.stdout.lower()
 
 
 # -- OSCrypt primitives ---------------------------------------------------
@@ -215,6 +224,43 @@ def _dpapi_unprotect(blob: bytes) -> bytes:
         return ctypes.string_at(blob_out.pbData, blob_out.cbData)
     finally:
         ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+
+
+def _dpapi_protect(data: bytes) -> bytes:
+    """Wrap bytes with the current user's DPAPI key (Windows only).
+
+    The inverse of :func:`_dpapi_unprotect`. Used to keep credential material
+    that cswap holds *outside* the app's own store protected at rest, and
+    independent of the app's encryption: the app may re-key its store (a build
+    migration re-encrypted it under a different key on 2026-07-27), which would
+    strand anything we had stored as its ciphertext.
+    """
+    if sys.platform != "win32":  # pragma: no cover - guarded by callers
+        raise DesktopStoreUnsupported("DPAPI is Windows-only")
+    buf = ctypes.create_string_buffer(data, len(data))
+    blob_in = _DataBlob(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
+    blob_out = _DataBlob()
+    ok = ctypes.windll.crypt32.CryptProtectData(
+        ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out)
+    )
+    if not ok:
+        raise DesktopStoreError(
+            f"CryptProtectData failed (Windows error {ctypes.GetLastError()})"
+        )
+    try:
+        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+
+
+def protect_credentials(credentials: str) -> bytes:
+    """DPAPI-wrap a credential string for at-rest storage outside the app."""
+    return _dpapi_protect(credentials.encode("utf-8"))
+
+
+def unprotect_credentials(blob: bytes) -> str:
+    """Unwrap what :func:`protect_credentials` produced."""
+    return _dpapi_unprotect(blob).decode("utf-8")
 
 
 def _read_json(path: Path) -> dict:
