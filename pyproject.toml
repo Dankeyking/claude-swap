@@ -10,6 +10,10 @@ dependencies = [
     # import it on the hot path; the macOS migration has a security-CLI
     # fallback and the legacy purge sweep no-ops when it's absent.
     "keyring>=25.0.0; sys_platform == 'win32'",
+    # Windows-only: AES-256-GCM for the Claude desktop app's Chromium OSCrypt
+    # store (desktop_store.py). The DPAPI half is ctypes; only the AEAD needs
+    # a dependency, and the stdlib has none.
+    "cryptography>=43.0.0; sys_platform == 'win32'",
     "textual>=8.2.8,<9",
     "truststore>=0.10.4",
 ]
