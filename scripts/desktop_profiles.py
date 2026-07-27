@@ -79,14 +79,57 @@ def cmd_list() -> int:
     return 0
 
 
+# Files a new profile should inherit from the default one. Claude Code's own
+# state (settings, projects, plans, skills) needs no copying -- it lives in
+# ~/.claude, keyed by the home directory, so every profile already shares it.
+# These two are Electron-profile-scoped and would otherwise start empty.
+INHERITED_FILES = (
+    "claude_desktop_config.json",  # MCP servers
+    "config.json",  # UI preferences; the login inside it is not copied (see below)
+)
+
+# Keys of config.json that belong to the *account*, never to preferences. A new
+# profile must start signed out -- copying these would seed it with the default
+# profile's login, which is exactly the credential-swap the app rejects anyway.
+ACCOUNT_SCOPED_KEYS = (*ds.TOKEN_CACHE_KEYS, ds.LAST_ACCOUNT_KEY)
+
+
+def _inherit_from_default(path: pathlib.Path) -> list[str]:
+    """Seed a new profile with the default's preferences, minus its login."""
+    default = ds.get_desktop_data_dir()
+    copied = []
+    for name in INHERITED_FILES:
+        src = default / name
+        if not src.exists():
+            continue
+        try:
+            data = json.loads(src.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if name == "config.json":
+            data = {k: v for k, v in data.items() if k not in ACCOUNT_SCOPED_KEYS}
+            # dxt:* keys are keyed by the default profile's organization and
+            # mean nothing in another account's profile.
+            data = {k: v for k, v in data.items() if not k.startswith("dxt:")}
+        (path / name).write_text(json.dumps(data, indent=2), encoding="utf-8")
+        copied.append(name)
+    return copied
+
+
 def cmd_create(name: str) -> int:
     path = profile_dir(name)
     if path.exists():
         print(f"Profil '{name}' existiert bereits: {path}")
         return 0
     path.mkdir(parents=True)
+    copied = _inherit_from_default(path)
     print(f"Profil '{name}' angelegt: {path}")
-    print("Starte es jetzt und melde dich dort mit dem gewuenschten Konto an:")
+    if copied:
+        print(f"  Uebernommen aus dem Standardprofil: {', '.join(copied)}")
+        print("  (ohne Login — dort meldest du dich gleich selbst an)")
+    print("\nClaude Codes eigener Zustand (Einstellungen, Projekte, Skills) liegt in")
+    print("~/.claude und wird von allen Profilen geteilt — nichts zu kopieren.")
+    print(f"\nJetzt starten und mit dem gewuenschten Konto anmelden:")
     print(f"  python scripts/desktop_profiles.py launch {name}")
     return 0
 
