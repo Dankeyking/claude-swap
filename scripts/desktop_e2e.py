@@ -26,7 +26,6 @@ from __future__ import annotations
 import hashlib
 import json
 import pathlib
-import shutil
 import sys
 
 from claude_swap import desktop_store as ds
