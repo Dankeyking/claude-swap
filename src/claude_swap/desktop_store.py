@@ -144,22 +144,48 @@ def get_desktop_data_dir() -> Path:
     )
 
 
-def get_desktop_config_path() -> Path:
+def get_desktop_config_path(data_dir: Path | None = None) -> Path:
     """Path of the Electron settings file holding the encrypted token cache."""
-    return get_desktop_data_dir() / "config.json"
+    return (data_dir or get_desktop_data_dir()) / "config.json"
 
 
-def get_desktop_local_state_path() -> Path:
+def get_desktop_local_state_path(data_dir: Path | None = None) -> Path:
     """Path of the Chromium ``Local State`` file holding the wrapped master key."""
-    return get_desktop_data_dir() / "Local State"
+    return (data_dir or get_desktop_data_dir()) / "Local State"
 
 
-def desktop_store_present() -> bool:
-    """Whether a readable desktop store exists on this machine (non-raising)."""
+def desktop_store_present(data_dir: Path | None = None) -> bool:
+    """Whether a readable desktop store exists here (non-raising)."""
     try:
-        return get_desktop_config_path().exists() and get_desktop_local_state_path().exists()
+        return (
+            get_desktop_config_path(data_dir).exists()
+            and get_desktop_local_state_path(data_dir).exists()
+        )
     except DesktopStoreUnsupported:
         return False
+
+
+def list_profiles() -> list[Path]:
+    """Every Electron profile directory that holds a desktop store.
+
+    The app's default profile plus any sibling started with
+    ``--user-data-dir``. Running one app instance per profile is what actually
+    separates two accounts: each profile owns its own cookie jar, LocalStorage
+    *and* OSCrypt key, so nothing is shared and nothing has to be swapped.
+    Swapping credentials inside a single profile does not work — the token
+    cache is downstream of the web session, and the app clears and re-mints it
+    on startup (observed 2026-07-27: "clearing token cache" then "performing
+    fresh oauth exchange" right after an external write).
+    """
+    try:
+        default = get_desktop_data_dir()
+    except DesktopStoreUnsupported:
+        return []
+    found = [default] if desktop_store_present(default) else []
+    for sibling in sorted(default.parent.glob(f"{default.name}-*")):
+        if sibling.is_dir() and desktop_store_present(sibling):
+            found.append(sibling)
+    return found
 
 
 def desktop_app_running() -> bool:
@@ -275,8 +301,11 @@ def _read_json(path: Path) -> dict:
     return data
 
 
-def get_master_key() -> bytes:
-    """Return the 32-byte AES key that protects the desktop app's secrets.
+def get_master_key(data_dir: Path | None = None) -> bytes:
+    """Return the 32-byte AES key that protects one profile's secrets.
+
+    Per profile, not per machine: a profile started with ``--user-data-dir``
+    gets its own ``Local State`` and therefore its own key.
 
     Raises:
         DesktopStoreError: If ``Local State`` is missing, malformed, or the DPAPI
@@ -287,7 +316,7 @@ def get_master_key() -> bytes:
         raise DesktopStoreUnsupported(
             "Reading the Claude desktop store is only implemented on Windows"
         )
-    state = _read_json(get_desktop_local_state_path())
+    state = _read_json(get_desktop_local_state_path(data_dir))
     try:
         encoded = state["os_crypt"]["encrypted_key"]
     except (KeyError, TypeError) as e:
@@ -487,14 +516,14 @@ def credentials_to_entry(credentials: str) -> TokenCacheEntry:
 # -- read / write ---------------------------------------------------------
 
 
-def read_entries() -> dict[str, TokenCacheEntry]:
-    """Decrypt every present token cache, keyed by its store key.
+def read_entries(data_dir: Path | None = None) -> dict[str, TokenCacheEntry]:
+    """Decrypt every present token cache of one profile, keyed by its store key.
 
     Missing caches are omitted rather than erroring: a build that only writes V2
-    is normal. An empty result means no desktop login exists.
+    is normal. An empty result means the profile holds no login.
     """
-    key = get_master_key()
-    config = _read_json(get_desktop_config_path())
+    key = get_master_key(data_dir)
+    config = _read_json(get_desktop_config_path(data_dir))
     entries: dict[str, TokenCacheEntry] = {}
     for name in TOKEN_CACHE_KEYS:
         raw = config.get(name)
@@ -504,22 +533,22 @@ def read_entries() -> dict[str, TokenCacheEntry]:
     return entries
 
 
-def read_active_credentials() -> str:
-    """Read the desktop app's active login as a cswap credential string.
+def read_active_credentials(data_dir: Path | None = None) -> str:
+    """Read a profile's active login as a cswap credential string.
 
-    Returns ``""`` when the app has no login stored. Prefers the V2 cache (the
+    Returns ``""`` when the profile holds no login. Prefers the V2 cache (the
     wider scope set current builds use) and falls back to V1.
     """
-    entries = read_entries()
+    entries = read_entries(data_dir)
     for name in reversed(TOKEN_CACHE_KEYS):  # V2 first
         if name in entries:
             return entry_to_credentials(entries[name])
     return ""
 
 
-def read_active_account_uuid() -> str | None:
-    """Read ``lastKnownAccountUuid``, or None when the app has never signed in."""
-    value = _read_json(get_desktop_config_path()).get(LAST_ACCOUNT_KEY)
+def read_active_account_uuid(data_dir: Path | None = None) -> str | None:
+    """Read ``lastKnownAccountUuid``, or None when the profile has no login."""
+    value = _read_json(get_desktop_config_path(data_dir)).get(LAST_ACCOUNT_KEY)
     return value if isinstance(value, str) and value else None
 
 
@@ -540,11 +569,23 @@ def backup_config(suffix: str = ".cswap-bak") -> Path:
 def write_active_credentials(
     credentials: str, account_uuid: str | None = None, *, allow_running: bool = False
 ) -> None:
-    """Activate a login in the desktop app's store.
+    """Write a login into a profile's token cache.
+
+    **This does not switch the app's account.** Measured 2026-07-27: on the next
+    start the app logged ``clearing token cache``, resolved its identity from the
+    web session instead, reported ``no cached token found`` for the very key
+    written here, and performed a fresh OAuth exchange. The token cache is a
+    cache downstream of the session (cookies + LocalStorage), not the source of
+    truth it is for the CLI. Use one profile per account (see
+    :func:`list_profiles`) to separate accounts.
+
+    Retained because it is the only writer that round-trips the store's format,
+    which keeps the format itself under test, and because a future build may
+    honour a pre-seeded cache. Callers must not present it as a switch.
 
     Rewrites both token caches with the target's material, updates
     ``lastKnownAccountUuid``, and leaves every other key in ``config.json``
-    untouched. Takes effect the next time the app starts.
+    untouched.
 
     Args:
         credentials: A cswap credential string carrying a desktop sidecar (see

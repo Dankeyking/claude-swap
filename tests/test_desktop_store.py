@@ -179,7 +179,7 @@ def test_decrypt_rejects_wrong_key():
 def fake_store(tmp_path, monkeypatch):
     """A config.json + patched master key, standing in for the real app dir."""
     monkeypatch.setattr(ds, "get_desktop_data_dir", lambda: tmp_path)
-    monkeypatch.setattr(ds, "get_master_key", lambda: KEY)
+    monkeypatch.setattr(ds, "get_master_key", lambda data_dir=None: KEY)
     monkeypatch.setattr(ds, "desktop_app_running", lambda: False)
     config = {
         "locale": "de-DE",
@@ -207,7 +207,7 @@ def test_read_active_credentials_prefers_v2(fake_store, monkeypatch):
 
 def test_read_active_credentials_empty_without_login(tmp_path, monkeypatch):
     monkeypatch.setattr(ds, "get_desktop_data_dir", lambda: tmp_path)
-    monkeypatch.setattr(ds, "get_master_key", lambda: KEY)
+    monkeypatch.setattr(ds, "get_master_key", lambda data_dir=None: KEY)
     (tmp_path / "config.json").write_text(json.dumps({"locale": "de"}), encoding="utf-8")
     assert ds.read_active_credentials() == ""
 
@@ -252,7 +252,7 @@ def test_write_refuses_while_the_app_is_running(fake_store, monkeypatch):
 
 def test_write_seeds_v2_when_no_cache_exists(tmp_path, monkeypatch):
     monkeypatch.setattr(ds, "get_desktop_data_dir", lambda: tmp_path)
-    monkeypatch.setattr(ds, "get_master_key", lambda: KEY)
+    monkeypatch.setattr(ds, "get_master_key", lambda data_dir=None: KEY)
     monkeypatch.setattr(ds, "desktop_app_running", lambda: False)
     (tmp_path / "config.json").write_text(json.dumps({"locale": "de"}), encoding="utf-8")
     target = ds.entry_to_credentials(ds.parse_token_cache(make_payload(org=ORG_B)))
@@ -274,6 +274,83 @@ def test_write_is_atomic_leaving_no_temp_files(fake_store):
     target = ds.entry_to_credentials(ds.parse_token_cache(make_payload(org=ORG_B)))
     ds.write_active_credentials(target, account_uuid="u")
     assert not list(fake_store.glob("*.tmp"))
+
+
+# -- profile discovery ----------------------------------------------------
+#
+# One profile per account is what actually separates two logins: each
+# --user-data-dir owns its cookie jar, LocalStorage *and* OSCrypt key.
+
+
+def make_profile(root, name, *, signed_in=True):
+    path = root / name
+    path.mkdir(parents=True)
+    (path / "Local State").write_text("{}", encoding="utf-8")
+    config = {}
+    if signed_in:
+        config["oauth:tokenCacheV2"] = "placeholder"
+    (path / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def profile_root(tmp_path, monkeypatch):
+    default = make_profile(tmp_path, "Claude")
+    monkeypatch.setattr(ds, "get_desktop_data_dir", lambda: default)
+    return tmp_path
+
+
+def test_list_profiles_finds_default_and_siblings(profile_root):
+    make_profile(profile_root, "Claude-privat")
+    make_profile(profile_root, "Claude-work")
+    names = [p.name for p in ds.list_profiles()]
+    assert names == ["Claude", "Claude-privat", "Claude-work"]
+
+
+def test_list_profiles_ignores_unrelated_neighbours(profile_root):
+    make_profile(profile_root, "Claude-privat")
+    make_profile(profile_root, "SomethingElse")
+    (profile_root / "Claude.txt").write_text("x", encoding="utf-8")
+    assert [p.name for p in ds.list_profiles()] == ["Claude", "Claude-privat"]
+
+
+def test_list_profiles_skips_directories_without_a_store(profile_root):
+    """A half-created profile dir is not yet a profile."""
+    (profile_root / "Claude-halbfertig").mkdir()
+    assert [p.name for p in ds.list_profiles()] == ["Claude"]
+
+
+def test_list_profiles_includes_signed_out_profiles(profile_root):
+    """A profile awaiting its first login still has to be listed and launchable."""
+    make_profile(profile_root, "Claude-neu", signed_in=False)
+    assert [p.name for p in ds.list_profiles()] == ["Claude", "Claude-neu"]
+
+
+def test_list_profiles_empty_off_windows(monkeypatch):
+    from claude_swap.models import Platform
+
+    monkeypatch.setattr(Platform, "detect", classmethod(lambda cls: Platform.LINUX))
+    assert ds.list_profiles() == []
+
+
+def test_paths_follow_the_given_profile(tmp_path):
+    assert ds.get_desktop_config_path(tmp_path) == tmp_path / "config.json"
+    assert ds.get_desktop_local_state_path(tmp_path) == tmp_path / "Local State"
+
+
+def test_read_entries_reads_the_profile_it_is_given(tmp_path, monkeypatch):
+    """Two profiles must not read through to each other."""
+    monkeypatch.setattr(ds, "get_master_key", lambda data_dir=None: KEY)
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    for path, org in ((a, ORG_A), (b, ORG_B)):
+        path.mkdir()
+        (path / "config.json").write_text(
+            json.dumps({"oauth:tokenCacheV2": ds.encrypt_value(KEY, make_payload(org=org))}),
+            encoding="utf-8",
+        )
+    assert ds.read_entries(a)["oauth:tokenCacheV2"].organization_uuid == ORG_A
+    assert ds.read_entries(b)["oauth:tokenCacheV2"].organization_uuid == ORG_B
 
 
 # -- DPAPI wrapping for at-rest storage outside the app -------------------
