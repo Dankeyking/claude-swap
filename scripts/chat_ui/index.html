@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Chat mit Kontowechsel</title>
+<style>
+  :root {
+    --bg: #faf9f7; --panel: #ffffff; --line: #e5e2dc; --ink: #1f1e1c;
+    --muted: #6b665c; --accent: #2a6fb5; --accent-soft: #e6f1fb;
+    --user: #eef4fa; --warn: #b45309; --danger: #b42318;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1917; --panel: #232220; --line: #35332f; --ink: #ecebe8;
+      --muted: #a39e94; --accent: #6ba5e0; --accent-soft: #1e3550;
+      --user: #26303b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 400 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+    height: 100vh; display: grid; grid-template-columns: 300px 1fr;
+  }
+  @media (max-width: 760px) { body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } }
+
+  /* ---- sidebar ---- */
+  aside {
+    background: var(--panel); border-right: 1px solid var(--line);
+    padding: 18px; overflow-y: auto;
+  }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+  .cwd { font-size: 12px; color: var(--muted); word-break: break-all; margin-bottom: 18px; }
+  h2 { font-size: 12px; font-weight: 600; text-transform: uppercase;
+       letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+
+  .acct {
+    width: 100%; text-align: left; background: var(--panel); color: inherit;
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 11px 12px; margin-bottom: 8px; cursor: pointer; font: inherit;
+    transition: border-color .12s, background .12s;
+  }
+  .acct:hover:not(:disabled) { border-color: var(--accent); }
+  .acct:disabled { cursor: default; opacity: .75; }
+  .acct.active { border-color: var(--accent); background: var(--accent-soft); }
+  .acct-top { display: flex; align-items: baseline; gap: 8px; }
+  .acct-name { font-weight: 600; }
+  .acct-badge { font-size: 11px; color: var(--accent); font-weight: 600; }
+  .acct-mail { font-size: 12px; color: var(--muted); word-break: break-all; }
+  .bars { margin-top: 8px; display: grid; gap: 5px; }
+  .bar-row { display: grid; grid-template-columns: 26px 1fr 38px; gap: 6px;
+             align-items: center; font-size: 11px; color: var(--muted); }
+  .track { height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; }
+  .fill { height: 100%; background: var(--accent); border-radius: 3px; }
+  .fill.hot { background: var(--warn); }
+  .fill.full { background: var(--danger); }
+
+  label.opt { display: block; font-size: 12px; color: var(--muted); margin: 4px 0 6px; }
+  select, button.ghost {
+    width: 100%; font: inherit; font-size: 13px; padding: 7px 9px;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--panel); color: inherit;
+  }
+  button.ghost { cursor: pointer; margin-top: 8px; }
+  button.ghost:hover { border-color: var(--accent); }
+  .note { font-size: 11px; color: var(--muted); margin-top: 14px; }
+
+  /* ---- chat ---- */
+  main { display: flex; flex-direction: column; min-height: 0; }
+  #log { flex: 1; overflow-y: auto; padding: 22px; display: flex;
+         flex-direction: column; gap: 14px; }
+  .msg { max-width: 760px; }
+  .msg .who { font-size: 11px; font-weight: 600; color: var(--muted);
+              text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
+  .msg .body { white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user .body {
+    background: var(--user); border-radius: var(--radius);
+    padding: 10px 13px; display: inline-block;
+  }
+  .msg.sys .body { font-size: 12px; color: var(--muted); font-style: italic; }
+  .msg.err .body { color: var(--danger); font-size: 13px; }
+  .msg pre { background: var(--panel); border: 1px solid var(--line);
+             border-radius: 8px; padding: 10px; overflow-x: auto; font-size: 13px; }
+  .meta { font-size: 11px; color: var(--muted); margin-top: 5px; }
+  .cursor::after { content: "▋"; animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  form { border-top: 1px solid var(--line); padding: 14px 22px 18px;
+         background: var(--panel); }
+  .row { display: flex; gap: 10px; align-items: flex-end; }
+  textarea {
+    flex: 1; font: inherit; resize: none; padding: 10px 12px; min-height: 46px;
+    max-height: 190px; border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--bg); color: inherit;
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button.send {
+    font: inherit; font-weight: 600; padding: 11px 20px; border: 0;
+    border-radius: var(--radius); background: var(--accent); color: #fff;
+    cursor: pointer; white-space: nowrap;
+  }
+  button.send:disabled { opacity: .5; cursor: default; }
+  .hint { font-size: 11px; color: var(--muted); margin-top: 7px; }
+</style>
+</head>
+<body>
+
+<aside>
+  <h1>Claude Chat</h1>
+  <div class="cwd" id="cwd">…</div>
+
+  <h2>Konto</h2>
+  <div id="accounts"></div>
+
+  <label class="opt" for="tools">Werkzeuge</label>
+  <select id="tools">
+    <option value="none">Nur Chat — keine Werkzeuge</option>
+    <option value="read">Lesend — Read, Grep, Web</option>
+  </select>
+
+  <button class="ghost" id="newChat">Neues Gespräch</button>
+  <div class="note" id="note">Der Kontowechsel wirkt ab der nächsten Nachricht. Das Gespräch bleibt erhalten.</div>
+</aside>
+
+<main>
+  <div id="log">
+    <div class="msg sys"><div class="body">Bereit. Das Gespräch läuft über die Claude Code CLI auf diesem Rechner.</div></div>
+  </div>
+  <form id="form">
+    <div class="row">
+      <textarea id="input" placeholder="Nachricht … (Enter sendet, Umschalt+Enter für neue Zeile)" rows="1"></textarea>
+      <button class="send" id="send" type="submit">Senden</button>
+    </div>
+    <div class="hint" id="hint"></div>
+  </form>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const log = $("log");
+let sessionId = null;
+let busy = false;
+
+const esc = (s) => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+/** Render text with fenced code blocks; everything else stays literal. */
+function render(el, text) {
+  const parts = text.split(/```/);
+  el.innerHTML = parts.map((part, i) =>
+    i % 2 ? `<pre>${esc(part.replace(/^[a-z]*\n/i, ""))}</pre>` : esc(part)
+  ).join("");
+}
+
+function addMsg(cls, who, text) {
+  const wrap = document.createElement("div");
+  wrap.className = `msg ${cls}`;
+  if (who) {
+    const w = document.createElement("div");
+    w.className = "who"; w.textContent = who;
+    wrap.appendChild(w);
+  }
+  const body = document.createElement("div");
+  body.className = "body";
+  if (text) render(body, text);
+  wrap.appendChild(body);
+  log.appendChild(wrap);
+  log.scrollTop = log.scrollHeight;
+  return body;
+}
+
+// ---- accounts ------------------------------------------------------
+
+function barClass(pct) { return pct >= 90 ? "fill full" : pct >= 75 ? "fill hot" : "fill"; }
+
+function bar(label, w) {
+  if (!w || typeof w.pct !== "number") return "";
+  return `<div class="bar-row"><span>${label}</span>
+    <span class="track"><span class="${barClass(w.pct)}" style="width:${Math.min(100, w.pct)}%"></span></span>
+    <span>${Math.round(w.pct)}%</span></div>`;
+}
+
+async function loadAccounts() {
+  const box = $("accounts");
+  let data;
+  try {
+    data = await (await fetch("/api/accounts")).json();
+  } catch (e) {
+    box.innerHTML = `<div class="note">Konten nicht abrufbar: ${esc(String(e))}</div>`;
+    return;
+  }
+  if (data.error) {
+    box.innerHTML = `<div class="note">${esc(data.error)}</div>`;
+    return;
+  }
+  box.innerHTML = "";
+  for (const a of data.accounts || []) {
+    const btn = document.createElement("button");
+    btn.className = "acct" + (a.active ? " active" : "");
+    btn.disabled = a.active || busy;
+    btn.innerHTML = `
+      <div class="acct-top">
+        <span class="acct-name">${esc(a.alias || ("Konto " + a.number))}</span>
+        ${a.active ? '<span class="acct-badge">aktiv</span>' : ""}
+      </div>
+      <div class="acct-mail">${esc(a.email || "")}</div>
+      <div class="bars">${bar("5h", a.usage?.fiveHour)}${bar("7d", a.usage?.sevenDay)}</div>`;
+    btn.onclick = () => switchTo(a.alias || String(a.number), a.email);
+    box.appendChild(btn);
+  }
+}
+
+async function switchTo(target, email) {
+  if (busy) return;
+  busy = true;
+  await loadAccounts();
+  try {
+    const res = await (await fetch("/api/switch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ account: target }),
+    })).json();
+    if (res.error) addMsg("err", null, "Wechsel fehlgeschlagen: " + res.error);
+    else addMsg("sys", null, `Konto gewechselt auf ${email || target}. Ab der nächsten Nachricht zahlt dieses Konto.`);
+  } catch (e) {
+    addMsg("err", null, "Wechsel fehlgeschlagen: " + String(e));
+  } finally {
+    busy = false;
+    loadAccounts();
+  }
+}
+
+// ---- chat ----------------------------------------------------------
+
+$("form").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const input = $("input");
+  const text = input.value.trim();
+  if (!text || busy) return;
+
+  addMsg("user", "Du", text);
+  input.value = ""; input.style.height = "auto";
+  busy = true; $("send").disabled = true; loadAccounts();
+
+  const body = addMsg("assistant", "Claude", "");
+  body.classList.add("cursor");
+  let acc = "";
+  let meta = null;
+
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text, sessionId, tools: $("tools").value }),
+    });
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const frames = buf.split("\n\n");
+      buf = frames.pop();
+      for (const frame of frames) {
+        const nameLine = frame.match(/^event: (.+)$/m);
+        const dataLine = frame.match(/^data: (.*)$/m);
+        if (!nameLine || !dataLine) continue;
+        let payload = {};
+        try { payload = JSON.parse(dataLine[1]); } catch { }
+        const name = nameLine[1];
+
+        if (name === "session") sessionId = payload.sessionId;
+        else if (name === "text") { acc += payload.text; render(body, acc); log.scrollTop = log.scrollHeight; }
+        else if (name === "tool") { acc += `\n[Werkzeug: ${payload.name}]\n`; render(body, acc); }
+        else if (name === "limit") {
+          const t = payload.rateLimitType, s = payload.status;
+          if (s && s !== "allowed") $("hint").textContent = `Limit (${t}): ${s}`;
+        } else if (name === "done") {
+          meta = payload;
+          if (!acc && payload.result) { acc = payload.result; render(body, acc); }
+        } else if (name === "error") {
+          addMsg("err", null, payload.message || "Unbekannter Fehler");
+        }
+      }
+    }
+  } catch (e) {
+    addMsg("err", null, String(e));
+  } finally {
+    body.classList.remove("cursor");
+    if (meta) {
+      const m = document.createElement("div");
+      m.className = "meta";
+      const secs = meta.durationMs ? (meta.durationMs / 1000).toFixed(1) + " s" : "";
+      const cost = typeof meta.cost === "number" ? "$" + meta.cost.toFixed(4) : "";
+      m.textContent = [secs, cost].filter(Boolean).join(" · ");
+      body.parentElement.appendChild(m);
+    }
+    busy = false; $("send").disabled = false;
+    loadAccounts();
+  }
+};
+
+$("input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("form").requestSubmit(); }
+});
+$("input").addEventListener("input", function () {
+  this.style.height = "auto";
+  this.style.height = Math.min(this.scrollHeight, 190) + "px";
+});
+
+$("newChat").onclick = () => {
+  sessionId = null;
+  log.innerHTML = "";
+  addMsg("sys", null, "Neues Gespräch. Das aktive Konto bleibt unverändert.");
+};
+
+fetch("/api/context").then(r => r.json()).then(d => { $("cwd").textContent = d.cwd; }).catch(() => { });
+loadAccounts();
+setInterval(() => { if (!busy) loadAccounts(); }, 30000);
+</script>
+</body>
+</html>
