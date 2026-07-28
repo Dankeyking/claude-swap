@@ -614,6 +614,31 @@ class Backend:
         except json.JSONDecodeError:
             return {"error": (err or out or f"cswap list failed (rc={rc})").strip()}
 
+    def autoswitch_once(self) -> dict:
+        """One `cswap auto` tick: switch if the active account is near its limit.
+
+        The original goal asked for automatic switching, and `cswap auto` does it
+        -- but only as a foreground loop in a terminal you have to remember to
+        start. Driving `--once` from here puts it where the work happens. Exit
+        codes are documented: 0 switched, 2 nothing to do, 3 no viable target.
+        """
+        rc, out, err = self._run([self.cswap, "auto", "--once", "--json"], timeout=120)
+        events = []
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    events.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+        return {
+            "switched": rc == 0,
+            "outcome": {0: "switched", 1: "error", 2: "nothing", 3: "blocked"}
+                       .get(rc, f"rc-{rc}"),
+            "events": events[-6:],
+            "detail": (err or "").strip()[:300],
+        }
+
     def switch(self, target: str) -> dict:
         rc, out, err = self._run([self.cswap, "switch", target, "--json"])
         try:
@@ -965,6 +990,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(result, 400 if "error" in result else 200)
         elif self.path == "/api/uploads/clear":
             self._json(self.backend.clear_uploads())
+        elif self.path == "/api/autoswitch":
+            self._json(self.backend.autoswitch_once())
         elif self.path == "/api/chat":
             self._stream_chat()
         else:
