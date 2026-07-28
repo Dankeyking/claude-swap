@@ -37,10 +37,12 @@
   /* Keyboard focus was invisible: outlines were switched off on the text
      inputs, and everything else relied on the browser default that the flat
      styling made hard to see. */
+  /* No border-radius here. It would apply to the *element*, not the ring, so a
+     focused round button snapped to a 6px square and every pill lost its shape.
+     Modern browsers follow the element's own radius with the outline anyway. */
   :focus-visible {
     outline: 2px solid var(--focus);
     outline-offset: 2px;
-    border-radius: 6px;
   }
 
   /* Motion is decorative here -- the blinking caret, the hover fades. Users who
@@ -437,9 +439,9 @@
     <div class="input-row">
       <textarea id="input" rows="1" placeholder="Nachricht an Claude …"></textarea>
       <button class="send" id="send" type="submit" title="Senden" aria-label="Senden">
-        <svg id="iconSend" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+        <svg id="iconSend" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M12 19V5M5 12l7-7 7 7"/>
+          <path d="M12 19V6M6 12l6-6 6 6"/>
         </svg>
         <svg id="iconStop" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" hidden>
           <rect x="5" y="5" width="14" height="14" rx="2.5"/>
