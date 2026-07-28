@@ -273,7 +273,7 @@
   }
   textarea::placeholder { color: var(--faint); }
   .send {
-    flex: none; width: 30px; height: 30px; border-radius: 8px; border: 0;
+    flex: none; width: 32px; height: 32px; border-radius: 999px; border: 0;
     background: var(--accent); color: #fff; cursor: pointer; display: grid;
     place-items: center; transition: opacity .16s;
   }
@@ -315,6 +315,17 @@
   .item:hover { background: var(--pill); }
   .item .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .item .sub { color: var(--faint); font-size: 12px; }
+  /* Two distinct slots: a leading icon (add menu, directory list) and a
+     trailing check mark (option menus, where the app puts it on the right).
+     One span was doing both jobs and reading as neither. */
+  .item .ico {
+    width: 16px; flex: none; display: grid; place-items: center; color: var(--muted);
+  }
+  .item .ico svg { width: 15px; height: 15px; }
+  .item .key {
+    flex: none; font-size: 11.5px; color: var(--faint); min-width: 11px;
+    text-align: right; font-variant-numeric: tabular-nums;
+  }
   .item .tick { width: 14px; color: var(--ink); flex: none; text-align: center; }
   .sep { height: 1px; background: var(--line-soft); margin: 5px 6px; }
   .hintline { font-size: 12px; color: var(--muted); padding: 4px 10px 8px; line-height: 1.45; }
@@ -337,7 +348,15 @@
   }
 
   .slider { padding: 10px 12px 6px; }
-  .slider input { width: 100%; accent-color: var(--accent); }
+  .slider input { width: 100%; accent-color: var(--accent); display: block; }
+  /* Step markers, as the app shows them. Chrome ignores <datalist> ticks on a
+     range input, so they are drawn as their own row. */
+  .slider .ticks {
+    display: flex; justify-content: space-between; padding: 0 6px; margin-top: -2px;
+  }
+  .slider .ticks span {
+    width: 3px; height: 3px; border-radius: 50%; background: var(--line);
+  }
   .slider .ends { display: flex; justify-content: space-between;
                   font-size: 11.5px; color: var(--faint); margin-top: 2px; }
   .pathrow { display: flex; gap: 6px; padding: 6px 6px 4px; }
@@ -453,12 +472,20 @@
     <div class="pop left" id="attachPop" style="min-width:340px">
       <h3>Hinzufügen</h3>
       <button type="button" class="item" id="attachUpload">
-        <span class="tick">↑</span>
-        <span class="label">Datei oder Bild hochladen …</span>
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21.4 11.05 12.25 20.2a5.5 5.5 0 0 1-7.78-7.78l8.49-8.49a3.67 3.67 0 0 1 5.18 5.18l-8.48 8.49a1.83 1.83 0 0 1-2.6-2.6l7.79-7.78"/>
+        </svg></span>
+        <span class="label">Datei oder Bild hochladen</span>
+        <span class="key">Strg+U</span>
       </button>
       <button type="button" class="item" id="attachSlash">
-        <span class="tick">/</span>
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+          <path d="M15 4 9 20"/>
+        </svg></span>
         <span class="label">Slash-Befehle</span>
+        <span class="key">/</span>
       </button>
       <div class="sep"></div>
       <div class="pathrow">
@@ -494,7 +521,9 @@
     <div class="pop right" id="effortPop">
       <h3>Aufwand</h3>
       <div class="slider">
-        <input type="range" id="effortRange" min="0" max="5" step="1" value="0">
+        <input type="range" id="effortRange" min="0" max="5" step="1" value="0"
+               aria-label="Aufwand">
+        <div class="ticks" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div>
         <div class="ends"><span>Schneller</span><span>Intelligenter</span></div>
       </div>
       <div class="hintline" id="effortHint"></div>
@@ -608,6 +637,18 @@ document.addEventListener("click", (e) => {
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePops(); });
 
+/* Digits pick an entry while a menu is open, matching the hints the app shows
+   next to its model and mode items. Skipped while typing in a field, so the
+   path and search inputs inside a popover still accept numbers. */
+document.addEventListener("keydown", (e) => {
+  if (!/^[1-9]$/.test(e.key) || e.ctrlKey || e.metaKey || e.altKey) return;
+  const tag = (e.target.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea") return;
+  const pop = POPS.map(([, p]) => $(p)).find(p => p.classList.contains("open"));
+  const item = pop?.querySelectorAll(".item")[+e.key - 1];
+  if (item) { e.preventDefault(); item.click(); }
+});
+
 /* The dir popover hangs off the header chip, so it needs its own anchoring. */
 $("dirPop").style.bottom = "auto";
 function placeDirPop() {
@@ -621,15 +662,18 @@ addEventListener("resize", () => closePops());
 
 function renderMenu(host, options, current, onPick) {
   host.innerHTML = "";
-  for (const o of options) {
+  options.forEach((o, i) => {
     const b = document.createElement("button");
     b.type = "button"; b.className = "item";
-    b.innerHTML = `<span class="tick">${o.v === current ? TICK : ""}</span>
-                   <span class="label">${esc(o.label)}</span>
-                   <span class="sub">${esc(o.sub || "")}</span>`;
+    // Order follows the app: label, description, shortcut digit, then the tick
+    // on the right.
+    b.innerHTML = `<span class="label">${esc(o.label)}</span>
+                   <span class="sub">${esc(o.sub || "")}</span>
+                   <span class="key">${i < 9 ? i + 1 : ""}</span>
+                   <span class="tick">${o.v === current ? TICK : ""}</span>`;
     b.onclick = () => { onPick(o.v); closePops(); };
     host.appendChild(b);
-  }
+  });
 }
 
 function syncPills() {
@@ -904,14 +948,20 @@ function applyContext(d) {
   if (d.parent) {
     const up = document.createElement("button");
     up.type = "button"; up.className = "item";
-    up.innerHTML = `<span class="tick">↑</span><span class="label">übergeordnet</span>`;
+    up.innerHTML = `<span class="ico"><svg viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+      stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg></span>
+      <span class="label">übergeordnet</span>`;
     up.onclick = () => { closePops(); changeDir(d.parent); };
     host.appendChild(up);
   }
   for (const name of d.subdirs || []) {
     const b = document.createElement("button");
     b.type = "button"; b.className = "item";
-    b.innerHTML = `<span class="tick"></span><span class="label">${esc(name)}</span>`;
+    b.innerHTML = `<span class="ico"><svg viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+      </svg></span><span class="label">${esc(name)}</span>`;
     b.onclick = () => { closePops(); changeDir(d.cwd.replace(/[\\/]$/, "") + "\\" + name); };
     host.appendChild(b);
   }
@@ -1075,7 +1125,11 @@ async function loadFiles() {
   for (const f of d.files || []) {
     const b = document.createElement("button");
     b.type = "button"; b.className = "item";
-    b.innerHTML = `<span class="tick">@</span><span class="label">${esc(f)}</span>`;
+    b.innerHTML = `<span class="ico"><svg viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+      stroke-linejoin="round" aria-hidden="true">
+      <path d="M14 3v5h5M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/>
+      </svg></span><span class="label">${esc(f)}</span>`;
     b.onclick = () => insertFile(f);
     host.appendChild(b);
   }
@@ -1443,7 +1497,11 @@ syncRailToggle();
 document.addEventListener("keydown", (e) => {
   // Ctrl+K jumps to the history search, Alt+N starts a conversation. Alt+N
   // rather than Ctrl+N: the browser owns that one and will not give it up.
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "u") {
+    e.preventDefault();          // the shortcut the app's add menu advertises
+    closePops();
+    $("filePick").click();
+  } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
     e.preventDefault();
     document.body.classList.remove("no-rail");
     localStorage.setItem("ui.rail", "on");
