@@ -84,6 +84,37 @@
     margin: 0; padding: 14px 16px 8px; letter-spacing: .02em;
   }
   .rail .list { flex: 1; overflow-y: auto; padding: 0 8px 14px; }
+  .railtop { padding: 0 12px 10px; display: grid; gap: 7px; }
+  .railtop input {
+    width: 100%; font: inherit; font-size: 13px; padding: 6px 9px;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--panel); color: inherit; outline: 0;
+  }
+  .railtop input:focus { border-color: var(--faint); }
+  .seg { display: flex; background: var(--pill); border-radius: 8px; padding: 2px; }
+  .seg button {
+    flex: 1; border: 0; background: transparent; border-radius: 6px;
+    padding: 4px 8px; font-size: 12.5px; color: var(--muted); cursor: pointer;
+  }
+  .seg button[aria-pressed="true"] { background: var(--raised); color: var(--ink); }
+  .grp {
+    font-size: 11px; color: var(--faint); padding: 12px 10px 4px;
+    letter-spacing: .03em;
+  }
+  .grp:first-child { padding-top: 2px; }
+  .conv .where {
+    font-size: 11px; color: var(--faint); margin-top: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .trunc {
+    text-align: center; font-size: 12.5px; color: var(--muted);
+    margin-bottom: 20px;
+  }
+  .trunc button {
+    border: 1px solid var(--line); background: var(--panel); color: inherit;
+    border-radius: 999px; padding: 4px 13px; font-size: 12.5px; cursor: pointer;
+  }
+  .trunc button:hover { border-color: var(--faint); }
   .conv {
     display: block; width: 100%; text-align: left; background: transparent;
     border: 0; border-radius: 9px; padding: 8px 10px; cursor: pointer;
@@ -371,6 +402,14 @@
 
 <aside class="rail">
   <h2>Verlauf</h2>
+  <div class="railtop">
+    <input id="convSearch" type="search" spellcheck="false"
+           placeholder="Suchen … (Strg+K)" aria-label="Verlauf durchsuchen">
+    <div class="seg" role="group" aria-label="Bereich">
+      <button type="button" id="scopeDir" aria-pressed="true">Hier</button>
+      <button type="button" id="scopeAll" aria-pressed="false">Alle</button>
+    </div>
+  </div>
   <div class="list" id="convs"></div>
 </aside>
 </div>
@@ -893,6 +932,7 @@ $("input").addEventListener("input", function () {
 $("newChat").onclick = () => {
   if (busy) return;
   sessionId = null;
+  currentConv = null;
   log.innerHTML = '<div class="empty" id="empty">Womit fangen wir an?</div>';
   markActiveConv();
   $("input").focus();
@@ -916,55 +956,139 @@ function whenLabel(epochSeconds) {
     { day: "2-digit", month: "2-digit", year: "2-digit" });
 }
 
+/** Calendar-day buckets, like the app's history: today and yesterday are their
+    own groups, then coarser ones. Compared by day, not by elapsed hours. */
+function groupOf(epochSeconds) {
+  const d = new Date(epochSeconds * 1000);
+  const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+  const days = Math.floor((midnight - d) / 86400000);
+  if (days <= 0) return "Heute";
+  if (days === 1) return "Gestern";
+  if (days < 7) return "Letzte 7 Tage";
+  if (days < 30) return "Letzte 30 Tage";
+  return "Älter";
+}
+
+const shortDir = (p) => (p || "").split(/[\\/]/).filter(Boolean).slice(-2).join("\\");
+
+let convRows = [];
+let convScope = localStorage.getItem("ui.scope") === "all" ? "all" : "dir";
+let currentConv = null;   // {id, cwd} of the opened conversation, for reloading
+
 function markActiveConv() {
   for (const el of document.querySelectorAll(".conv")) {
     el.setAttribute("aria-current", String(el.dataset.id === sessionId));
   }
 }
 
-async function loadConversations() {
+function renderConvs() {
   const host = $("convs");
-  let data;
-  try { data = await (await fetch("/api/sessions")).json(); }
-  catch { return; }
-  const rows = data.sessions || [];
+  const q = $("convSearch").value.trim().toLowerCase();
+  const rows = q
+    ? convRows.filter(s => s.title.toLowerCase().includes(q)
+                        || (s.cwd || "").toLowerCase().includes(q))
+    : convRows;
+
   if (!rows.length) {
-    host.innerHTML = '<div class="none">Noch keine Gespräche in diesem Verzeichnis.</div>';
+    host.innerHTML = `<div class="none">${
+      q ? "Nichts gefunden." :
+      convScope === "all" ? "Noch keine Gespräche."
+                          : "Keine Gespräche in diesem Verzeichnis."}</div>`;
     return;
   }
   host.innerHTML = "";
+  let group = null;
   for (const s of rows) {
+    const g = groupOf(s.updatedAt);
+    if (g !== group) {
+      group = g;
+      const h = document.createElement("div");
+      h.className = "grp"; h.textContent = g;
+      host.appendChild(h);
+    }
     const b = document.createElement("button");
     b.type = "button"; b.className = "conv"; b.dataset.id = s.id;
     b.setAttribute("aria-current", String(s.id === sessionId));
+    b.title = s.cwd || "";
+    const where = convScope === "all" && s.cwd
+      ? `<div class="where">${esc(shortDir(s.cwd))}</div>` : "";
     b.innerHTML = `<div class="t">${esc(s.title)}</div>
-                   <div class="d">${esc(whenLabel(s.updatedAt))} · ${s.turns} ${s.turns === 1 ? "Frage" : "Fragen"}</div>`;
-    b.onclick = () => openConversation(s.id);
+                   <div class="d">${esc(whenLabel(s.updatedAt))} · ${s.turns} ${s.turns === 1 ? "Frage" : "Fragen"}</div>
+                   ${where}`;
+    b.onclick = () => openConversation(s.id, s.cwd);
     host.appendChild(b);
   }
 }
 
-async function openConversation(id) {
-  if (busy || id === sessionId) return;
+async function loadConversations() {
+  try {
+    const data = await (await fetch("/api/sessions?scope=" + convScope)).json();
+    convRows = data.sessions || [];
+  } catch { return; }
+  renderConvs();
+}
+
+function setScope(scope) {
+  convScope = scope;
+  localStorage.setItem("ui.scope", scope);
+  $("scopeDir").setAttribute("aria-pressed", String(scope === "dir"));
+  $("scopeAll").setAttribute("aria-pressed", String(scope === "all"));
+  loadConversations();
+}
+
+async function openConversation(id, cwd, limit) {
+  if (busy) return;
+  // --resume resolves an id relative to the working directory, so a
+  // conversation from elsewhere has to move the session there first.
+  if (cwd && ctx && cwd !== ctx.cwd) {
+    try {
+      const d = await (await fetch("/api/cwd", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd }),
+      })).json();
+      if (d.error) { addTurn("note bad", d.error); return; }
+      applyContext(d);
+    } catch (e) { addTurn("note bad", String(e)); return; }
+  }
+
+  const url = "/api/session?id=" + encodeURIComponent(id)
+            + (limit === undefined ? "" : "&limit=" + limit);
   let data;
-  try { data = await (await fetch("/api/session?id=" + encodeURIComponent(id))).json(); }
+  try { data = await (await fetch(url)).json(); }
   catch (e) { addTurn("note bad", String(e)); return; }
   if (data.error) { addTurn("note bad", data.error); return; }
 
   log.innerHTML = "";
+  if (data.truncated) {
+    const hidden = data.total - data.messages.length;
+    const box = document.createElement("div");
+    box.className = "trunc";
+    box.innerHTML = `${hidden} ältere Beiträge nicht geladen · `;
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.textContent = "Alle laden";
+    btn.onclick = () => openConversation(id, cwd, 0);
+    box.appendChild(btn);
+    log.appendChild(box);
+  }
   for (const m of data.messages) {
     if (m.role === "user") addTurn("user", m.text);
-    else {
-      const b = addTurn("claude", m.text);
-      addCopyButtons(b);
-    }
+    else addCopyButtons(addTurn("claude", m.text));
   }
   if (!data.messages.length) addTurn("note", "Dieses Gespräch enthält keinen sichtbaren Verlauf.");
   sessionId = id;
+  currentConv = { id, cwd };
   markActiveConv();
   scrollDown(true);
   $("input").focus();
 }
+
+$("convSearch").addEventListener("input", renderConvs);
+$("convSearch").addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { e.stopPropagation(); e.target.value = ""; renderConvs(); }
+});
+$("scopeDir").onclick = () => setScope("dir");
+$("scopeAll").onclick = () => setScope("all");
+setScope(convScope);
 
 $("railToggle").onclick = () => {
   const hidden = document.body.classList.toggle("no-rail");
@@ -973,11 +1097,24 @@ $("railToggle").onclick = () => {
 };
 if (localStorage.getItem("ui.rail") === "off") document.body.classList.add("no-rail");
 
+document.addEventListener("keydown", (e) => {
+  // Ctrl+K jumps to the history search, Alt+N starts a conversation. Alt+N
+  // rather than Ctrl+N: the browser owns that one and will not give it up.
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    document.body.classList.remove("no-rail");
+    localStorage.setItem("ui.rail", "on");
+    $("convSearch").focus(); $("convSearch").select();
+  } else if (e.altKey && e.key.toLowerCase() === "n") {
+    e.preventDefault();
+    $("newChat").click();
+  }
+});
+
 /* ---------- boot ---------- */
 
 syncPills();
-loadAccounts();
-loadConversations();
+loadAccounts();   // the history list is loaded by setScope() above
 fetch("/api/context").then(r => r.json()).then(applyContext).catch(() => { });
 setInterval(() => { if (!busy) loadAccounts(); }, 30000);
 $("input").focus();

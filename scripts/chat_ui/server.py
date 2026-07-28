@@ -28,6 +28,7 @@ import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 HERE = Path(__file__).resolve().parent
 
@@ -221,52 +222,113 @@ class Backend:
             )
         return ""
 
-    def list_sessions(self, limit: int = 60) -> dict:
-        """Conversations for the current directory, newest first."""
-        folder = self._project_dir()
-        if folder is None:
-            return {"sessions": []}
-        rows = []
-        for f in folder.glob("*.jsonl"):
-            try:
-                stat = f.stat()
-            except OSError:
-                continue
-            title, first_user, turns = None, None, 0
-            try:
-                with f.open("r", encoding="utf-8", errors="replace") as fh:
-                    for line in fh:
+    def _scan_file(self, path: Path) -> dict | None:
+        """Metadata for one transcript, or None when it holds no exchange.
+
+        Byte-level prefilter before any parsing: a long conversation is mostly
+        assistant lines, and each can be tens of kilobytes. Scanning every
+        project directory would crawl if all of them were parsed, so only lines
+        that look like a title or a user turn are decoded -- the parse then
+        confirms it, so the cheap check never decides anything on its own.
+        """
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        title, first_user, recorded_cwd, turns = None, None, None, 0
+        try:
+            with path.open("rb") as fh:
+                for raw in fh:
+                    if b'"aiTitle"' in raw:
                         try:
-                            e = json.loads(line)
+                            e = json.loads(raw)
                         except json.JSONDecodeError:
                             continue
-                        kind = e.get("type")
-                        if kind == "ai-title" and e.get("aiTitle"):
+                        if e.get("type") == "ai-title" and e.get("aiTitle"):
                             title = str(e["aiTitle"])
-                        elif kind == "user" and not e.get("isSidechain"):
-                            turns += 1
-                            if first_user is None:
-                                first_user = self._text_of(e.get("message", {}).get("content"))
+                        continue
+                    if b'"type":"user"' not in raw:
+                        continue
+                    try:
+                        e = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    if e.get("type") != "user" or e.get("isSidechain"):
+                        continue
+                    if recorded_cwd is None and isinstance(e.get("cwd"), str):
+                        recorded_cwd = e["cwd"]
+                    # Tool results come back as user-role entries too. Counting
+                    # those would report a tool-heavy conversation as hundreds
+                    # of questions; only entries carrying actual text are ones
+                    # the person typed.
+                    text = self._text_of(e.get("message", {}).get("content"))
+                    if not text.strip():
+                        continue
+                    turns += 1
+                    if first_user is None:
+                        first_user = text
+        except OSError:
+            return None
+        if not turns:
+            return None  # a session file with no exchange is noise in the list
+        if not title:
+            # First line of the opening question, while Claude Code has not
+            # written its generated title yet. Skip machinery the harness wraps
+            # around a prompt (<local-command-caveat>, <command-name>, ...) --
+            # it is never what the conversation was about.
+            lines = [
+                ln.strip() for ln in (first_user or "").splitlines()
+                if ln.strip() and not ln.lstrip().startswith("<")
+            ]
+            title = lines[0] if lines else ""
+        return {
+            "id": path.stem,
+            "title": title.strip()[:90] or "Ohne Titel",
+            "turns": turns,
+            "updatedAt": stat.st_mtime,
+            "cwd": recorded_cwd or "",
+        }
+
+    def list_sessions(self, scope: str = "dir", limit: int = 200) -> dict:
+        """Conversations newest first, for this directory or for all of them.
+
+        ``scope="all"`` walks every project directory, which is what makes a
+        conversation findable without knowing where it was started. Each row
+        carries the directory recorded inside the transcript itself, so opening
+        one can move the session there -- ``--resume`` resolves an id relative
+        to the working directory and would not find it otherwise.
+        """
+        folders: list[Path] = []
+        if scope == "all":
+            root = Path.home() / ".claude" / "projects"
+            if root.is_dir():
+                folders = [p for p in root.iterdir() if p.is_dir()]
+        else:
+            folder = self._project_dir()
+            if folder is not None:
+                folders = [folder]
+
+        rows = []
+        for folder in folders:
+            try:
+                files = list(folder.glob("*.jsonl"))
             except OSError:
                 continue
-            if not turns:
-                continue  # a session file with no exchange is noise in the list
-            if not title:
-                # First line of the opening question, when Claude Code has not
-                # written its generated title yet.
-                lines = (first_user or "").strip().splitlines()
-                title = lines[0] if lines else ""
-            rows.append({
-                "id": f.stem,
-                "title": title.strip()[:90] or "Ohne Titel",
-                "turns": turns,
-                "updatedAt": stat.st_mtime,
-            })
+            for f in files:
+                row = self._scan_file(f)
+                if row:
+                    rows.append(row)
         rows.sort(key=lambda r: r["updatedAt"], reverse=True)
-        return {"sessions": rows[:limit]}
+        return {"sessions": rows[:limit], "scope": scope}
 
-    def read_session(self, session_id: str) -> dict:
-        """The visible exchange of one conversation, for re-display."""
+    def read_session(self, session_id: str, limit: int = 80) -> dict:
+        """The visible exchange of one conversation, newest ``limit`` messages.
+
+        Long conversations are truncated from the front on purpose: this UI
+        renders markdown per message, and a transcript with hundreds of turns
+        takes seconds to lay out. ``limit=0`` loads everything, which is the
+        caller's explicit choice rather than the default.
+        """
         if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", session_id):
             return {"error": "ungueltige Sitzungs-ID"}
         folder = self._project_dir()
@@ -277,10 +339,12 @@ class Backend:
             return {"error": "Sitzung nicht gefunden"}
         messages = []
         try:
-            with path.open("r", encoding="utf-8", errors="replace") as fh:
-                for line in fh:
+            with path.open("rb") as fh:
+                for raw in fh:
+                    if b'"type":"user"' not in raw and b'"type":"assistant"' not in raw:
+                        continue
                     try:
-                        e = json.loads(line)
+                        e = json.loads(raw)
                     except json.JSONDecodeError:
                         continue
                     if e.get("isSidechain"):
@@ -293,7 +357,16 @@ class Backend:
                         messages.append({"role": kind, "text": text})
         except OSError as e:
             return {"error": str(e)}
-        return {"id": session_id, "messages": messages}
+        total = len(messages)
+        truncated = bool(limit) and total > limit
+        if truncated:
+            messages = messages[-limit:]
+        return {
+            "id": session_id,
+            "messages": messages,
+            "total": total,
+            "truncated": truncated,
+        }
 
     def list_dirs(self) -> dict:
         """The current directory, its parent, and its immediate subdirectories."""
@@ -520,12 +593,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, html, "text/html; charset=utf-8")
         elif self.path == "/api/accounts":
             self._json(self.backend.accounts())
-        elif self.path == "/api/sessions":
-            self._json(self.backend.list_sessions())
-        elif self.path.startswith("/api/session?"):
-            from urllib.parse import parse_qs, urlparse
-            wanted = parse_qs(urlparse(self.path).query).get("id", [""])[0]
-            self._json(self.backend.read_session(wanted))
+        elif self.path.split("?")[0] == "/api/sessions":
+            q = parse_qs(urlparse(self.path).query)
+            scope = "all" if q.get("scope", ["dir"])[0] == "all" else "dir"
+            self._json(self.backend.list_sessions(scope))
+        elif self.path.split("?")[0] == "/api/session":
+            q = parse_qs(urlparse(self.path).query)
+            wanted = q.get("id", [""])[0]
+            try:
+                limit = max(0, min(2000, int(q.get("limit", ["80"])[0])))
+            except ValueError:
+                limit = 80
+            self._json(self.backend.read_session(wanted, limit))
         elif self.path == "/api/context":
             # Options ship with the context so the UI never hardcodes a value
             # the server would reject.
