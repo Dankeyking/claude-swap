@@ -20,6 +20,7 @@ import json
 import os
 import queue
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -60,6 +61,11 @@ PERMISSION_MODES = (
 )
 
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+# How long a turn may produce nothing at all before it is ended. Deliberately
+# generous: at high effort the first text can be minutes away, and killing a
+# turn that was merely thinking would be worse than waiting.
+IDLE_LIMIT_S = 600
 
 # Slash commands work in print mode -- `/context` returns a real report, not an
 # echo -- so the composer offers them. The authoritative list per directory
@@ -190,13 +196,13 @@ class Backend:
         # (timestamp, relative paths, capped) per directory -- see list_files.
         self._file_cache: dict[str, tuple[float, list[str], bool]] = {}
 
-    def commands(self) -> dict:
+    def commands(self, cwd: Path | None = None) -> dict:
         """Slash commands offered for the current directory.
 
         ``exact`` is False while only the seed list is known -- no turn has run
         here yet, so the CLI has not had a chance to report its own.
         """
-        known = self._commands.get(str(self.cwd))
+        known = self._commands.get(str(cwd or self.cwd))
         names = known if known is not None else list(SEED_COMMANDS)
         return {
             "commands": [
@@ -206,6 +212,22 @@ class Backend:
             ],
             "exact": known is not None,
         }
+
+    def resolve_cwd(self, raw) -> Path:
+        """The directory a request means, or the startup one.
+
+        Requests carry their own directory so two browser tabs cannot fight over
+        one piece of server state: before this, a tab that changed directory
+        silently repointed every other tab's next message.
+        """
+        if isinstance(raw, str) and raw.strip():
+            try:
+                p = Path(raw).expanduser().resolve()
+                if p.is_dir():
+                    return p
+            except (OSError, ValueError):
+                pass
+        return self.cwd
 
     def set_cwd(self, raw: str) -> dict:
         """Point new turns at another directory.
@@ -240,7 +262,7 @@ class Backend:
             out = out.replace(ch, "-")
         return out
 
-    def _project_dir(self) -> Path | None:
+    def _project_dir(self, cwd: Path | None = None) -> Path | None:
         """The transcript directory for the current cwd, or None if there is none.
 
         The encoded name is derived, then verified; if it is absent, fall back
@@ -248,12 +270,13 @@ class Backend:
         got wrong degrades to a slower lookup rather than an empty list.
         """
         root = Path.home() / ".claude" / "projects"
-        guess = root / self._encode_cwd(self.cwd)
+        cwd = cwd or self.cwd
+        guess = root / self._encode_cwd(cwd)
         if guess.is_dir():
             return guess
         if not root.is_dir():
             return None
-        target = str(self.cwd).lower()
+        target = str(cwd).lower()
         for candidate in root.iterdir():
             if not candidate.is_dir():
                 continue
@@ -309,7 +332,7 @@ class Backend:
                         if e.get("type") == "ai-title" and e.get("aiTitle"):
                             title = str(e["aiTitle"])
                         continue
-                    if b'"type":"user"' not in raw:
+                    if b'"user"' not in raw:
                         continue
                     try:
                         e = json.loads(raw)
@@ -351,7 +374,8 @@ class Backend:
             "cwd": recorded_cwd or "",
         }
 
-    def list_sessions(self, scope: str = "dir", limit: int = 200) -> dict:
+    def list_sessions(self, scope: str = "dir", limit: int = 200,
+                      cwd: Path | None = None) -> dict:
         """Conversations newest first, for this directory or for all of them.
 
         ``scope="all"`` walks every project directory, which is what makes a
@@ -366,7 +390,7 @@ class Backend:
             if root.is_dir():
                 folders = [p for p in root.iterdir() if p.is_dir()]
         else:
-            folder = self._project_dir()
+            folder = self._project_dir(cwd)
             if folder is not None:
                 folders = [folder]
 
@@ -383,7 +407,8 @@ class Backend:
         rows.sort(key=lambda r: r["updatedAt"], reverse=True)
         return {"sessions": rows[:limit], "scope": scope}
 
-    def read_session(self, session_id: str, limit: int = 80) -> dict:
+    def read_session(self, session_id: str, limit: int = 80,
+                     cwd: Path | None = None) -> dict:
         """The visible exchange of one conversation, newest ``limit`` messages.
 
         Long conversations are truncated from the front on purpose: this UI
@@ -393,7 +418,7 @@ class Backend:
         """
         if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", session_id):
             return {"error": "ungueltige Sitzungs-ID"}
-        folder = self._project_dir()
+        folder = self._project_dir(cwd)
         if folder is None:
             return {"error": "kein Verlauf fuer dieses Verzeichnis"}
         path = folder / f"{session_id}.jsonl"
@@ -403,7 +428,7 @@ class Backend:
         try:
             with path.open("rb") as fh:
                 for raw in fh:
-                    if b'"type":"user"' not in raw and b'"type":"assistant"' not in raw:
+                    if b'"user"' not in raw and b'"assistant"' not in raw:
                         continue
                     try:
                         e = json.loads(raw)
@@ -445,7 +470,8 @@ class Backend:
     FILE_CACHE_TTL = 30.0
     FILE_WALK_CAP = 6000
 
-    def list_files(self, query: str = "", limit: int = 60) -> dict:
+    def list_files(self, query: str = "", limit: int = 60,
+                   cwd: Path | None = None) -> dict:
         """Relative paths under the working directory, filtered by ``query``.
 
         Cached briefly per directory: the picker filters as the user types, and
@@ -453,19 +479,20 @@ class Backend:
         capped so a directory that turns out to be enormous cannot hang a
         request; ``capped`` says so rather than pretending the list is complete.
         """
-        key = str(self.cwd)
+        cwd = cwd or self.cwd
+        key = str(cwd)
         now = time.monotonic()
         cached = self._file_cache.get(key)
         if cached is None or now - cached[0] > self.FILE_CACHE_TTL:
             paths: list[str] = []
             capped = False
-            for root, dirs, names in os.walk(self.cwd):
+            for root, dirs, names in os.walk(cwd):
                 dirs[:] = [d for d in dirs
                            if d not in self.SKIP_DIRS and not d.startswith(".")]
                 for n in names:
                     if n.startswith("."):
                         continue
-                    rel = os.path.relpath(os.path.join(root, n), self.cwd)
+                    rel = os.path.relpath(os.path.join(root, n), cwd)
                     paths.append(rel.replace("\\", "/"))
                     if len(paths) >= self.FILE_WALK_CAP:
                         capped = True
@@ -487,6 +514,41 @@ class Backend:
     UPLOAD_DIR = Path.home() / ".claude-swap-backup" / "chat-uploads"
     MAX_UPLOAD = 25 * 1024 * 1024
 
+    def uploads_info(self) -> dict:
+        """How much the upload folder holds, so it is not silently unbounded."""
+        try:
+            files = [f for f in self.UPLOAD_DIR.glob("*") if f.is_file()]
+        except OSError:
+            return {"count": 0, "bytes": 0}
+        total = 0
+        for f in files:
+            try:
+                total += f.stat().st_size
+            except OSError:
+                pass
+        return {"count": len(files), "bytes": total}
+
+    def clear_uploads(self) -> dict:
+        """Delete every stored upload.
+
+        Only ever touches its own directory, and only files -- a stray
+        subdirectory is left alone rather than recursed into.
+        """
+        removed, failed = 0, 0
+        try:
+            entries = list(self.UPLOAD_DIR.glob("*"))
+        except OSError:
+            return {"removed": 0, "failed": 0}
+        for f in entries:
+            if not f.is_file():
+                continue
+            try:
+                f.unlink()
+                removed += 1
+            except OSError:
+                failed += 1
+        return {"removed": removed, "failed": failed, **self.uploads_info()}
+
     def save_upload(self, name: str, data: bytes) -> dict:
         """Store an uploaded file and return the path to reference it by.
 
@@ -505,19 +567,20 @@ class Backend:
             return {"error": f"Speichern fehlgeschlagen: {e}"}
         return {"path": str(target), "name": safe, "size": len(data)}
 
-    def list_dirs(self) -> dict:
+    def list_dirs(self, cwd: Path | None = None) -> dict:
         """The current directory, its parent, and its immediate subdirectories."""
         try:
+            cwd = cwd or self.cwd
             subdirs = sorted(
-                (p.name for p in self.cwd.iterdir() if p.is_dir() and not p.name.startswith(".")),
+                (p.name for p in cwd.iterdir() if p.is_dir() and not p.name.startswith(".")),
                 key=str.lower,
             )
         except OSError as e:
             subdirs = []
             _ = e
-        parent = self.cwd.parent
+        parent = cwd.parent
         return {
-            "cwd": str(self.cwd),
+            "cwd": str(cwd),
             "parent": str(parent) if parent != self.cwd else None,
             "subdirs": subdirs[:200],
         }
@@ -529,9 +592,15 @@ class Backend:
         with the ANSI code page, which raises on bytes these CLIs legitimately
         emit and leaves stdout as None.
         """
-        proc = subprocess.run(
-            args, capture_output=True, timeout=timeout, cwd=str(self.cwd)
-        )
+        try:
+            proc = subprocess.run(
+                args, capture_output=True, timeout=timeout, cwd=str(self.cwd)
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            # A missing or wedged CLI used to raise straight through the handler
+            # and drop the connection, which the page saw as a network error
+            # with no explanation.
+            return 127, "", f"{args[0]} nicht ausfuehrbar: {e}"
         return (
             proc.returncode,
             (proc.stdout or b"").decode("utf-8", "replace"),
@@ -565,6 +634,7 @@ class Backend:
         closed, the user pressed stop -- the child must be killed, or it runs the
         turn to completion and bills an answer no one will read.
         """
+        run_cwd = self.resolve_cwd(opts.get("cwd"))
         turn = Turn()
         events = turn.events
         args = [
@@ -597,7 +667,7 @@ class Backend:
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    cwd=str(self.cwd),
+                    cwd=str(run_cwd),
                     # POSIX: own session, so cancelling can signal the whole
                     # group. Windows gets the same reach via taskkill /T.
                     start_new_session=(sys.platform != "win32"),
@@ -627,10 +697,31 @@ class Backend:
             drainer = threading.Thread(target=drain, daemon=True)
             drainer.start()
 
+            # A wedged child produces nothing, and reading its stdout blocks
+            # forever -- the existing wait(timeout=30) only runs *after* the
+            # stream closes, so it never fires. This watchdog ends a turn that
+            # has gone quiet. The limit is generous on purpose: with high effort
+            # a model can think for minutes before its first text arrives.
+            last_output = [time.monotonic()]
+
+            def watchdog() -> None:
+                while proc.poll() is None and not turn.cancelled:
+                    if time.monotonic() - last_output[0] > IDLE_LIMIT_S:
+                        events.put(("error", {
+                            "message": f"Keine Antwort seit {IDLE_LIMIT_S // 60} Minuten "
+                                       "— Turn abgebrochen."
+                        }))
+                        turn.cancel()
+                        return
+                    time.sleep(2)
+
+            threading.Thread(target=watchdog, daemon=True).start()
+
             try:
                 proc.stdin.write(message.encode("utf-8"))
                 proc.stdin.close()
                 for raw in proc.stdout:
+                    last_output[0] = time.monotonic()
                     line = raw.decode("utf-8", "replace").strip()
                     if not line:
                         continue
@@ -643,7 +734,7 @@ class Backend:
                         # an authoritative list for this directory.
                         found = msg.get("slash_commands")
                         if isinstance(found, list):
-                            self._commands[str(self.cwd)] = [str(c) for c in found]
+                            self._commands[str(run_cwd)] = [str(c) for c in found]
                     self._translate(msg, events)
                 proc.wait(timeout=30)
                 drainer.join(timeout=5)
@@ -715,6 +806,48 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, data: dict, code: int = 200) -> None:
         self._send(code, json.dumps(data).encode("utf-8"), "application/json; charset=utf-8")
 
+    # -- request authenticity ---------------------------------------------
+    #
+    # Binding to 127.0.0.1 keeps other machines out; it does not keep other
+    # *pages* out. A `text/plain` POST is a CORS "simple request", so any site
+    # open in the browser could fire one at this server with no preflight to
+    # stop it -- verified against the running server, which answered 200 to a
+    # write carrying `Origin: https://boese.example`. It could not read the
+    # reply, but the switch, the turn and its cost all happened.
+    #
+    # Three checks, each cheap and each sufficient on its own:
+    #   1. Origin, when present, must be this server.
+    #   2. Writes must be application/json, which no simple request can be.
+    #   3. Writes must carry the token handed to the page that loaded from here.
+
+    def _origin_ok(self) -> bool:
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True          # same-origin fetches and curl send none
+        host = self.headers.get("Host") or f"127.0.0.1:{self.server.server_port}"
+        return origin in (f"http://{host}", f"https://{host}")
+
+    def _token_ok(self) -> bool:
+        return self.headers.get("X-Chat-Token") == self.server.chat_token
+
+    def _authentic(self, *allowed_types: str) -> bool:
+        """Whether a state-changing request may proceed.
+
+        ``allowed_types`` are the content types this route accepts. Uploads use
+        ``application/octet-stream`` rather than JSON; both are non-simple, so
+        both still require a CORS preflight that this server never answers.
+        """
+        if not self._origin_ok() or not self._token_ok():
+            return False
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip()
+        return ctype in allowed_types
+
+    def _reject(self) -> None:
+        self._json({
+            "error": "Anfrage abgewiesen: fremde Herkunft oder fehlendes Token. "
+                     "Lade die Seite neu."
+        }, 403)
+
     def _not_found(self) -> None:
         """404 that a fetch can read.
 
@@ -743,24 +876,37 @@ class Handler(BaseHTTPRequestHandler):
     # -- routes ----------------------------------------------------------
 
     def do_GET(self) -> None:
+        # Reads are cross-origin-unreadable anyway (no CORS header is ever
+        # sent), but transcripts are in there -- so they carry the same gate as
+        # writes rather than relying on that alone.
+        if self.path.startswith("/api/") and not (self._origin_ok() and self._token_ok()):
+            self._reject()
+            return
         if self.path in ("/", "/index.html"):
             try:
-                html = (HERE / "index.html").read_bytes()
+                html = (HERE / "index.html").read_text(encoding="utf-8")
             except OSError as e:
                 self._send(500, str(e).encode(), "text/plain; charset=utf-8")
                 return
-            self._send(200, html, "text/html; charset=utf-8")
+            # The page gets the token; nothing that did not load from here can.
+            html = html.replace("__CHAT_TOKEN__", self.server.chat_token)
+            self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
+        elif self.path == "/api/uploads":
+            self._json(self.backend.uploads_info())
         elif self.path == "/api/accounts":
             self._json(self.backend.accounts())
-        elif self.path == "/api/commands":
-            self._json(self.backend.commands())
+        elif self.path.split("?")[0] == "/api/commands":
+            q = parse_qs(urlparse(self.path).query)
+            self._json(self.backend.commands(self.backend.resolve_cwd(q.get("cwd", [None])[0])))
         elif self.path.split("?")[0] == "/api/files":
             q = parse_qs(urlparse(self.path).query)
-            self._json(self.backend.list_files(q.get("q", [""])[0]))
+            self._json(self.backend.list_files(
+                q.get("q", [""])[0], cwd=self.backend.resolve_cwd(q.get("cwd", [None])[0])))
         elif self.path.split("?")[0] == "/api/sessions":
             q = parse_qs(urlparse(self.path).query)
             scope = "all" if q.get("scope", ["dir"])[0] == "all" else "dir"
-            self._json(self.backend.list_sessions(scope))
+            self._json(self.backend.list_sessions(
+                scope, cwd=self.backend.resolve_cwd(q.get("cwd", [None])[0])))
         elif self.path.split("?")[0] == "/api/session":
             q = parse_qs(urlparse(self.path).query)
             wanted = q.get("id", [""])[0]
@@ -768,12 +914,14 @@ class Handler(BaseHTTPRequestHandler):
                 limit = max(0, min(2000, int(q.get("limit", ["80"])[0])))
             except ValueError:
                 limit = 80
-            self._json(self.backend.read_session(wanted, limit))
-        elif self.path == "/api/context":
+            self._json(self.backend.read_session(
+                wanted, limit, cwd=self.backend.resolve_cwd(q.get("cwd", [None])[0])))
+        elif self.path.split("?")[0] == "/api/context":
             # Options ship with the context so the UI never hardcodes a value
             # the server would reject.
+            q = parse_qs(urlparse(self.path).query)
             self._json({
-                **self.backend.list_dirs(),
+                **self.backend.list_dirs(self.backend.resolve_cwd(q.get("cwd", [None])[0])),
                 "models": list(MODELS),
                 "permissionModes": list(PERMISSION_MODES),
                 "efforts": list(EFFORTS),
@@ -783,6 +931,10 @@ class Handler(BaseHTTPRequestHandler):
             self._not_found()
 
     def do_POST(self) -> None:
+        upload = self.path.split("?")[0] == "/api/upload"
+        if not self._authentic("application/octet-stream" if upload else "application/json"):
+            self._reject()
+            return
         if self.path == "/api/switch":
             target = str(self._body().get("account", "")).strip()
             if not target:
@@ -811,6 +963,8 @@ class Handler(BaseHTTPRequestHandler):
             data = self.rfile.read(length)
             result = self.backend.save_upload(name, data)
             self._json(result, 400 if "error" in result else 200)
+        elif self.path == "/api/uploads/clear":
+            self._json(self.backend.clear_uploads())
         elif self.path == "/api/chat":
             self._stream_chat()
         else:
@@ -832,6 +986,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
 
+        # The tab's directory rides in the query like every other call; hand it
+        # to the run so a second tab cannot decide where this one executes.
+        body.setdefault("cwd", parse_qs(urlparse(self.path).query).get("cwd", [None])[0])
         turn = self.backend.chat(message, body.get("sessionId") or None, body)
         while True:
             item = turn.events.get()
@@ -871,6 +1028,8 @@ def main() -> int:
 
     Handler.backend = Backend(cwd)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    # New per run: a token that only a page served from here ever receives.
+    server.chat_token = secrets.token_urlsafe(24)
     url = f"http://127.0.0.1:{args.port}"
     print(f"Chat-UI laeuft auf {url}")
     print(f"  Arbeitsverzeichnis : {cwd}")

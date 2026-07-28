@@ -574,6 +574,27 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
+
+/* The server hands this page a per-run token and refuses any /api call without
+   it. Binding to localhost is not isolation: a `text/plain` POST is a CORS
+   simple request, so before this any site open in the browser could have fired
+   writes at this server -- spending quota, switching the account -- without a
+   preflight to stop it. Every call goes through here so none can forget. */
+const CHAT_TOKEN = "__CHAT_TOKEN__";
+
+function api(path, opts = {}) {
+  // Every request names the directory this tab is on. Before, that lived in one
+  // server-side variable, so a tab that changed directory silently repointed
+  // every other tab's next message.
+  if (ctx?.cwd && path.startsWith("/api/") && !path.startsWith("/api/cwd")) {
+    path += (path.includes("?") ? "&" : "?") + "cwd=" + encodeURIComponent(ctx.cwd);
+  }
+  const headers = { "X-Chat-Token": CHAT_TOKEN, ...(opts.headers || {}) };
+  if (opts.body !== undefined && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+  return fetch(path, { ...opts, headers });
+}
 const log = $("log");
 let sessionId = null, busy = false, ctx = null;
 
@@ -909,7 +930,7 @@ function pctClass(p) { return p >= 90 ? "pct full" : p >= 75 ? "pct hot" : "pct"
 
 async function loadAccounts() {
   let data;
-  try { data = await (await fetch("/api/accounts")).json(); } catch { return; }
+  try { data = await (await api("/api/accounts")).json(); } catch { return; }
   const box = $("accounts");
   if (data.error) { box.textContent = ""; return; }
   box.innerHTML = "";
@@ -932,7 +953,7 @@ async function switchTo(target, email) {
   if (busy) return;
   busy = true; loadAccounts();
   try {
-    const res = await (await fetch("/api/switch", {
+    const res = await (await api("/api/switch", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ account: target }),
     })).json();
@@ -979,7 +1000,7 @@ async function changeDir(path) {
   if (busy || !path) return;
   const hint = $("dirHint");
   try {
-    const d = await (await fetch("/api/cwd", {
+    const d = await (await api("/api/cwd", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cwd: path }),
     })).json();
@@ -1050,7 +1071,7 @@ $("form").onsubmit = async (ev) => {
 
   inflight = new AbortController();
   try {
-    const res = await fetch("/api/chat", {
+    const res = await api("/api/chat", {
       method: "POST", headers: { "Content-Type": "application/json" },
       signal: inflight.signal,
       body: JSON.stringify({
@@ -1124,7 +1145,7 @@ let fileTimer = 0;
 async function loadFiles() {
   const q = $("fileSearch").value.trim();
   let d;
-  try { d = await (await fetch("/api/files?q=" + encodeURIComponent(q))).json(); }
+  try { d = await (await api("/api/files?q=" + encodeURIComponent(q))).json(); }
   catch { return; }
   const host = $("fileItems");
   host.innerHTML = "";
@@ -1176,7 +1197,7 @@ async function uploadFile(file) {
     return;
   }
   try {
-    const res = await fetch("/api/upload?name=" + encodeURIComponent(file.name), {
+    const res = await api("/api/upload?name=" + encodeURIComponent(file.name), {
       method: "POST",
       headers: { "Content-Type": "application/octet-stream" },
       body: await file.arrayBuffer(),
@@ -1262,7 +1283,7 @@ let cmdIndex = 0;
 
 async function loadCommands() {
   try {
-    const d = await (await fetch("/api/commands")).json();
+    const d = await (await api("/api/commands")).json();
     cmdAll = d.commands || [];
   } catch { cmdAll = []; }
 }
@@ -1435,7 +1456,7 @@ function renderConvs() {
 
 async function loadConversations() {
   try {
-    const data = await (await fetch("/api/sessions?scope=" + convScope)).json();
+    const data = await (await api("/api/sessions?scope=" + convScope)).json();
     convRows = data.sessions || [];
   } catch { return; }
   renderConvs();
@@ -1455,7 +1476,7 @@ async function openConversation(id, cwd, limit) {
   // conversation from elsewhere has to move the session there first.
   if (cwd && ctx && cwd !== ctx.cwd) {
     try {
-      const d = await (await fetch("/api/cwd", {
+      const d = await (await api("/api/cwd", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cwd }),
       })).json();
@@ -1467,7 +1488,7 @@ async function openConversation(id, cwd, limit) {
   const url = "/api/session?id=" + encodeURIComponent(id)
             + (limit === undefined ? "" : "&limit=" + limit);
   let data;
-  try { data = await (await fetch(url)).json(); }
+  try { data = await (await api(url)).json(); }
   catch (e) { addTurn("note bad", String(e)); return; }
   if (data.error) { addTurn("note bad", data.error); return; }
 
@@ -1544,7 +1565,7 @@ document.addEventListener("keydown", (e) => {
 syncPills();
 loadAccounts();   // the history list is loaded by setScope() above
 loadCommands();
-fetch("/api/context").then(r => r.json()).then(applyContext).catch(() => { });
+api("/api/context").then(r => r.json()).then(applyContext).catch(() => { });
 setInterval(() => { if (!busy) loadAccounts(); }, 30000);
 $("input").focus();
 </script>
