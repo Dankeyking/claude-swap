@@ -6,304 +6,527 @@
 <title>Claude Chat mit Kontowechsel</title>
 <style>
   :root {
-    --bg: #faf9f7; --panel: #ffffff; --line: #e5e2dc; --ink: #1f1e1c;
-    --muted: #6b665c; --accent: #2a6fb5; --accent-soft: #e6f1fb;
-    --user: #eef4fa; --warn: #b45309; --danger: #b42318;
-    --radius: 10px;
+    --bg: #faf9f7; --panel: #fff; --raised: #fff;
+    --line: #e6e3dd; --line-soft: #efedE8;
+    --ink: #1c1b19; --muted: #7a746a; --faint: #a29b90;
+    --accent: #c96442; --accent-ink: #8f4429;
+    --pill: #f2f0eb; --pill-hover: #e9e6df;
+    --ok: #4a7c59; --warn: #b45309; --danger: #b42318;
+    --shadow: 0 8px 28px rgba(28,27,25,.13), 0 1px 3px rgba(28,27,25,.07);
+    --radius: 14px;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #1a1917; --panel: #232220; --line: #35332f; --ink: #ecebe8;
-      --muted: #a39e94; --accent: #6ba5e0; --accent-soft: #1e3550;
-      --user: #26303b;
+      --bg: #1b1a18; --panel: #232220; --raised: #2b2926;
+      --line: #38352f; --line-soft: #2f2d29;
+      --ink: #efedE8; --muted: #a29b90; --faint: #7a746a;
+      --accent: #d97757; --accent-ink: #e8a084;
+      --pill: #2f2d29; --pill-hover: #3a3733;
+      --shadow: 0 8px 28px rgba(0,0,0,.45), 0 1px 3px rgba(0,0,0,.3);
     }
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
     margin: 0; background: var(--bg); color: var(--ink);
-    font: 400 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
-    height: 100vh; display: grid; grid-template-columns: 300px 1fr;
+    font: 400 15px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column;
   }
-  @media (max-width: 760px) { body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } }
+  button { font: inherit; color: inherit; }
 
-  /* ---- sidebar ---- */
-  aside {
-    background: var(--panel); border-right: 1px solid var(--line);
-    padding: 18px; overflow-y: auto;
+  /* ---------- header ---------- */
+  header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 18px; border-bottom: 1px solid var(--line-soft);
   }
-  h1 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
-  .cwd { font-size: 12px; color: var(--muted); word-break: break-all; margin-bottom: 18px; }
-  h2 { font-size: 12px; font-weight: 600; text-transform: uppercase;
-       letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+  .mark { width: 17px; height: 17px; flex: none; color: var(--accent); }
+  .spacer { flex: 1; }
+
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: transparent; border: 1px solid transparent; border-radius: 999px;
+    padding: 5px 11px; cursor: pointer; font-size: 13px; color: var(--muted);
+    max-width: 340px; transition: background .12s, color .12s, border-color .12s;
+  }
+  .chip:hover { background: var(--pill); color: var(--ink); }
+  .chip .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .acct {
-    width: 100%; text-align: left; background: var(--panel); color: inherit;
-    border: 1px solid var(--line); border-radius: var(--radius);
-    padding: 11px 12px; margin-bottom: 8px; cursor: pointer; font: inherit;
-    transition: border-color .12s, background .12s;
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--pill); border: 1px solid transparent; border-radius: 999px;
+    padding: 5px 12px 5px 10px; cursor: pointer; font-size: 13px;
+    transition: background .12s, border-color .12s;
   }
-  .acct:hover:not(:disabled) { border-color: var(--accent); }
-  .acct:disabled { cursor: default; opacity: .75; }
-  .acct.active { border-color: var(--accent); background: var(--accent-soft); }
-  .acct-top { display: flex; align-items: baseline; gap: 8px; }
-  .acct-name { font-weight: 600; }
-  .acct-badge { font-size: 11px; color: var(--accent); font-weight: 600; }
-  .acct-mail { font-size: 12px; color: var(--muted); word-break: break-all; }
-  .bars { margin-top: 8px; display: grid; gap: 5px; }
-  .bar-row { display: grid; grid-template-columns: 26px 1fr 38px; gap: 6px;
-             align-items: center; font-size: 11px; color: var(--muted); }
-  .track { height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; }
-  .fill { height: 100%; background: var(--accent); border-radius: 3px; }
-  .fill.hot { background: var(--warn); }
-  .fill.full { background: var(--danger); }
+  .acct:hover:not(:disabled) { background: var(--pill-hover); }
+  .acct[aria-current="true"] { background: var(--raised); border-color: var(--line); }
+  .acct:disabled { cursor: default; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
+  .acct[aria-current="true"] .dot { background: var(--ok); }
+  .acct .pct { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+  .acct .pct.hot { color: var(--warn); }
+  .acct .pct.full { color: var(--danger); }
 
-  label.opt { display: block; font-size: 12px; color: var(--muted); margin: 4px 0 6px; }
-  select, button.ghost, input[type=text] {
-    width: 100%; font: inherit; font-size: 13px; padding: 7px 9px;
-    border: 1px solid var(--line); border-radius: 8px;
-    background: var(--panel); color: inherit;
+  /* ---------- chat ---------- */
+  main { flex: 1; overflow-y: auto; }
+  .col { max-width: 760px; margin: 0 auto; padding: 30px 24px 8px; }
+  .turn { margin-bottom: 26px; }
+  .turn.user { display: flex; justify-content: flex-end; }
+  .turn.user .bubble {
+    background: var(--pill); border-radius: 16px; padding: 10px 15px;
+    max-width: 85%; white-space: pre-wrap; word-wrap: break-word;
   }
-  button.ghost { cursor: pointer; margin-top: 8px; }
-  button.ghost:hover { border-color: var(--accent); }
-  .note { font-size: 11px; color: var(--muted); margin-top: 14px; }
-  .note.bad { color: var(--danger); }
-  .row-inline { display: flex; gap: 6px; margin-top: 6px; }
-  .row-inline input[type=text] { flex: 1; min-width: 0; }
-  button.ghost.inline { width: auto; margin-top: 0; white-space: nowrap; }
-  aside h2 { margin-top: 20px; }
-  aside h2:first-of-type { margin-top: 0; }
-
-  /* ---- chat ---- */
-  main { display: flex; flex-direction: column; min-height: 0; }
-  #log { flex: 1; overflow-y: auto; padding: 22px; display: flex;
-         flex-direction: column; gap: 14px; }
-  .msg { max-width: 760px; }
-  .msg .who { font-size: 11px; font-weight: 600; color: var(--muted);
-              text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
-  .msg .body { white-space: pre-wrap; word-wrap: break-word; }
-  .msg.user .body {
-    background: var(--user); border-radius: var(--radius);
-    padding: 10px 13px; display: inline-block;
+  .turn.claude .bubble { white-space: pre-wrap; word-wrap: break-word; }
+  .turn.claude .bubble pre {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px; overflow-x: auto;
+    font: 400 13px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace;
+    white-space: pre;
   }
-  .msg.sys .body { font-size: 12px; color: var(--muted); font-style: italic; }
-  .msg.err .body { color: var(--danger); font-size: 13px; }
-  .msg pre { background: var(--panel); border: 1px solid var(--line);
-             border-radius: 8px; padding: 10px; overflow-x: auto; font-size: 13px; }
-  .meta { font-size: 11px; color: var(--muted); margin-top: 5px; }
-  .cursor::after { content: "▋"; animation: blink 1s steps(2) infinite; }
+  .turn.note { text-align: center; }
+  .turn.note .bubble {
+    display: inline-block; font-size: 12.5px; color: var(--muted);
+    background: var(--pill); border-radius: 999px; padding: 4px 13px;
+  }
+  .turn.note.bad .bubble { color: var(--danger); }
+  .meta { font-size: 11.5px; color: var(--faint); margin-top: 7px;
+          font-variant-numeric: tabular-nums; }
+  .cursor::after {
+    content: ""; display: inline-block; width: 7px; height: 15px;
+    background: var(--ink); margin-left: 2px; vertical-align: -2px;
+    animation: blink 1.1s steps(2) infinite;
+  }
   @keyframes blink { 50% { opacity: 0; } }
+  .empty { text-align: center; color: var(--faint); padding-top: 14vh; font-size: 15px; }
 
-  form { border-top: 1px solid var(--line); padding: 14px 22px 18px;
-         background: var(--panel); }
-  .row { display: flex; gap: 10px; align-items: flex-end; }
+  /* ---------- composer ---------- */
+  footer { padding: 0 24px 22px; }
+  .composer {
+    max-width: 760px; margin: 0 auto; position: relative;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); box-shadow: 0 1px 2px rgba(28,27,25,.05);
+    transition: border-color .12s;
+  }
+  .composer:focus-within { border-color: var(--faint); }
+  .input-row { display: flex; align-items: flex-end; gap: 8px; padding: 12px 12px 0; }
   textarea {
-    flex: 1; font: inherit; resize: none; padding: 10px 12px; min-height: 46px;
-    max-height: 190px; border: 1px solid var(--line); border-radius: var(--radius);
-    background: var(--bg); color: inherit;
+    flex: 1; border: 0; outline: 0; resize: none; background: transparent;
+    color: inherit; font: inherit; padding: 2px 2px 4px; max-height: 220px;
+    min-height: 26px; line-height: 1.55;
   }
-  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-  button.send {
-    font: inherit; font-weight: 600; padding: 11px 20px; border: 0;
-    border-radius: var(--radius); background: var(--accent); color: #fff;
-    cursor: pointer; white-space: nowrap;
+  textarea::placeholder { color: var(--faint); }
+  .send {
+    flex: none; width: 30px; height: 30px; border-radius: 8px; border: 0;
+    background: var(--accent); color: #fff; cursor: pointer; display: grid;
+    place-items: center; transition: opacity .12s;
   }
-  button.send:disabled { opacity: .5; cursor: default; }
-  .hint { font-size: 11px; color: var(--muted); margin-top: 7px; }
+  .send:disabled { opacity: .35; cursor: default; }
+  .send svg { width: 15px; height: 15px; }
+
+  .bar { display: flex; align-items: center; gap: 4px; padding: 6px 9px 9px; flex-wrap: wrap; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px; background: transparent;
+    border: 0; border-radius: 8px; padding: 5px 9px; cursor: pointer;
+    font-size: 13px; color: var(--muted); transition: background .12s, color .12s;
+  }
+  .pill:hover, .pill[aria-expanded="true"] { background: var(--pill); color: var(--ink); }
+  .pill.on { color: var(--ok); }
+  .pill.warn { color: var(--danger); }
+  .pill svg { width: 13px; height: 13px; opacity: .65; }
+
+  /* ---------- popovers ---------- */
+  .pop {
+    position: absolute; bottom: calc(100% + 8px); z-index: 40; min-width: 250px;
+    background: var(--raised); border: 1px solid var(--line);
+    border-radius: 12px; box-shadow: var(--shadow); padding: 6px;
+    display: none; max-height: 60vh; overflow-y: auto;
+  }
+  .pop.open { display: block; }
+  .pop.right { right: 0; }
+  .pop.left { left: 0; }
+  .pop h3 {
+    font-size: 11.5px; font-weight: 500; color: var(--faint); margin: 0;
+    padding: 7px 10px 5px; letter-spacing: .02em;
+  }
+  .item {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    background: transparent; border: 0; border-radius: 8px; padding: 8px 10px;
+    cursor: pointer; text-align: left; font-size: 13.5px;
+  }
+  .item:hover { background: var(--pill); }
+  .item .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .item .sub { color: var(--faint); font-size: 12px; }
+  .item .tick { width: 14px; color: var(--ink); flex: none; text-align: center; }
+  .sep { height: 1px; background: var(--line-soft); margin: 5px 6px; }
+  .hintline { font-size: 12px; color: var(--muted); padding: 4px 10px 8px; line-height: 1.45; }
+  .hintline.bad { color: var(--danger); }
+
+  .slider { padding: 10px 12px 6px; }
+  .slider input { width: 100%; accent-color: var(--accent); }
+  .slider .ends { display: flex; justify-content: space-between;
+                  font-size: 11.5px; color: var(--faint); margin-top: 2px; }
+  .pathrow { display: flex; gap: 6px; padding: 6px 6px 4px; }
+  .pathrow input {
+    flex: 1; min-width: 0; font: inherit; font-size: 13px; padding: 7px 9px;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--panel); color: inherit; outline: 0;
+  }
+  .pathrow input:focus { border-color: var(--faint); }
+  .pathrow button {
+    border: 1px solid var(--line); background: var(--panel); border-radius: 8px;
+    padding: 0 12px; cursor: pointer; font-size: 13px;
+  }
+  .pathrow button:hover { background: var(--pill); }
 </style>
 </head>
 <body>
 
-<aside>
-  <h1>Claude Chat</h1>
-
-  <h2>Verzeichnis</h2>
-  <div class="cwd" id="cwd">…</div>
-  <select id="dirs"><option value="">Unterordner wählen …</option></select>
-  <div class="row-inline">
-    <input id="cwdInput" type="text" spellcheck="false" placeholder="Pfad eingeben">
-    <button class="ghost inline" id="cwdGo">Los</button>
-  </div>
-  <div class="note" id="cwdNote">Ein Wechsel startet ein neues Gespräch.</div>
-
-  <h2>Konto</h2>
-  <div id="accounts"></div>
-
-  <h2>Sitzung</h2>
-
-  <label class="opt" for="model">Modell</label>
-  <select id="model">
-    <option value="">Standard</option>
-    <option value="opus">Opus — am stärksten</option>
-    <option value="sonnet">Sonnet — ausgewogen</option>
-    <option value="haiku">Haiku — am schnellsten</option>
-    <option value="fable">Fable</option>
-  </select>
-
-  <label class="opt" for="effort">Denktiefe</label>
-  <select id="effort">
-    <option value="">Standard</option>
-    <option value="low">niedrig</option>
-    <option value="medium">mittel</option>
-    <option value="high">hoch</option>
-    <option value="xhigh">sehr hoch</option>
-    <option value="max">maximal</option>
-  </select>
-
-  <label class="opt" for="tools">Werkzeuge</label>
-  <select id="tools">
-    <option value="none">Nur Chat — keine Werkzeuge</option>
-    <option value="read">Lesend — Read, Grep, Web</option>
-    <option value="all">Alle Werkzeuge</option>
-  </select>
-
-  <label class="opt" for="mode">Modus</label>
-  <select id="mode">
-    <option value="">Standard — fragt nach</option>
-    <option value="plan">Plan — erst planen, nichts ändern</option>
-    <option value="acceptEdits">Bearbeitungen annehmen</option>
-    <option value="dontAsk">Nicht fragen</option>
-  </select>
-  <div class="note" id="modeNote"></div>
-
-  <button class="ghost" id="newChat">Neues Gespräch</button>
-  <div class="note" id="note">Der Kontowechsel wirkt ab der nächsten Nachricht. Das Gespräch bleibt erhalten.</div>
-</aside>
+<header>
+  <svg class="mark" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M12 2 13.9 8.4 20 6.6l-4.3 4.9L21 15l-6.3.3 1 6.2-3.7-5-3.7 5 1-6.2L3 15l5.3-3.5L4 6.6l6.1 1.8z"/>
+  </svg>
+  <button class="chip" id="dirChip" aria-expanded="false" aria-haspopup="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14" aria-hidden="true">
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+    </svg>
+    <span class="path" id="dirLabel">…</span>
+  </button>
+  <div class="spacer"></div>
+  <div id="accounts" style="display:flex;gap:6px"></div>
+</header>
 
 <main>
-  <div id="log">
-    <div class="msg sys"><div class="body">Bereit. Das Gespräch läuft über die Claude Code CLI auf diesem Rechner.</div></div>
+  <div class="col" id="log">
+    <div class="empty" id="empty">Womit fangen wir an?</div>
   </div>
-  <form id="form">
-    <div class="row">
-      <textarea id="input" placeholder="Nachricht … (Enter sendet, Umschalt+Enter für neue Zeile)" rows="1"></textarea>
-      <button class="send" id="send" type="submit">Senden</button>
-    </div>
-    <div class="hint" id="hint"></div>
-  </form>
 </main>
+
+<footer>
+  <form class="composer" id="form">
+    <div class="input-row">
+      <textarea id="input" rows="1" placeholder="Nachricht an Claude …"></textarea>
+      <button class="send" id="send" type="submit" title="Senden" aria-label="Senden">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 19V5M5 12l7-7 7 7"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="bar">
+      <button type="button" class="pill" id="modePill" aria-expanded="false" aria-haspopup="true">
+        <span id="modeLabel">Auto</span>
+      </button>
+      <button type="button" class="pill" id="toolsPill" aria-expanded="false" aria-haspopup="true">
+        <span id="toolsLabel">Nur Chat</span>
+      </button>
+      <div class="spacer"></div>
+      <button type="button" class="pill" id="modelPill" aria-expanded="false" aria-haspopup="true">
+        <span id="modelLabel">Standard</span>
+      </button>
+      <button type="button" class="pill" id="effortPill" aria-expanded="false" aria-haspopup="true">
+        <span id="effortLabel">Standard</span>
+      </button>
+    </div>
+
+    <!-- popovers -->
+    <div class="pop left" id="modePop">
+      <h3>Modus</h3>
+      <div id="modeItems"></div>
+      <div class="sep"></div>
+      <div class="hintline" id="modeHint"></div>
+    </div>
+
+    <div class="pop left" id="toolsPop">
+      <h3>Werkzeuge</h3>
+      <div id="toolsItems"></div>
+    </div>
+
+    <div class="pop right" id="modelPop">
+      <h3>Modelle</h3>
+      <div id="modelItems"></div>
+    </div>
+
+    <div class="pop right" id="effortPop">
+      <h3>Aufwand</h3>
+      <div class="slider">
+        <input type="range" id="effortRange" min="0" max="5" step="1" value="0">
+        <div class="ends"><span>Schneller</span><span>Intelligenter</span></div>
+      </div>
+      <div class="hintline" id="effortHint"></div>
+    </div>
+
+    <div class="pop left" id="dirPop" style="min-width:330px">
+      <h3>Arbeitsverzeichnis</h3>
+      <div id="dirItems"></div>
+      <div class="sep"></div>
+      <div class="pathrow">
+        <input id="dirInput" type="text" spellcheck="false" placeholder="Pfad eingeben">
+        <button type="button" id="dirGo">Los</button>
+      </div>
+      <div class="hintline" id="dirHint">Ein Wechsel startet ein neues Gespräch.</div>
+    </div>
+  </form>
+</footer>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const log = $("log");
-let sessionId = null;
-let busy = false;
+let sessionId = null, busy = false, ctx = null;
 
 const esc = (s) => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const TICK = "✓";
 
-/** Render text with fenced code blocks; everything else stays literal. */
-function render(el, text) {
-  const parts = text.split(/```/);
-  el.innerHTML = parts.map((part, i) =>
-    i % 2 ? `<pre>${esc(part.replace(/^[a-z]*\n/i, ""))}</pre>` : esc(part)
-  ).join("");
+/* ---------- option catalogue ---------- */
+
+const MODELS = [
+  { v: "", label: "Standard", sub: "" },
+  { v: "opus", label: "Opus 5", sub: "am stärksten" },
+  { v: "sonnet", label: "Sonnet 5", sub: "ausgewogen" },
+  { v: "haiku", label: "Haiku 4.5", sub: "am schnellsten" },
+  { v: "fable", label: "Fable 5", sub: "" },
+];
+const MODES = [
+  { v: "", label: "Standard", sub: "fragt nach" },
+  { v: "plan", label: "Plan", sub: "erst planen" },
+  { v: "acceptEdits", label: "Bearbeitungen annehmen", sub: "" },
+  { v: "dontAsk", label: "Nicht fragen", sub: "" },
+];
+const TOOLSETS = [
+  { v: "none", label: "Nur Chat", sub: "keine Werkzeuge" },
+  { v: "read", label: "Lesend", sub: "Read, Grep, Web" },
+  { v: "all", label: "Alle Werkzeuge", sub: "" },
+];
+const EFFORTS = ["", "low", "medium", "high", "xhigh", "max"];
+const EFFORT_LABEL = { "": "Standard", low: "Niedrig", medium: "Mittel",
+                       high: "Hoch", xhigh: "Sehr hoch", max: "Maximal" };
+
+const state = { model: "", mode: "", tools: "none", effort: "" };
+for (const k of Object.keys(state)) {
+  const saved = localStorage.getItem("ui." + k);
+  if (saved !== null) state[k] = saved;
 }
+const save = (k) => localStorage.setItem("ui." + k, state[k]);
 
-function addMsg(cls, who, text) {
-  const wrap = document.createElement("div");
-  wrap.className = `msg ${cls}`;
-  if (who) {
-    const w = document.createElement("div");
-    w.className = "who"; w.textContent = who;
-    wrap.appendChild(w);
+/* ---------- popovers ---------- */
+
+const POPS = [["modePill", "modePop"], ["toolsPill", "toolsPop"],
+              ["modelPill", "modelPop"], ["effortPill", "effortPop"],
+              ["dirChip", "dirPop"]];
+
+function closePops(except) {
+  for (const [pill, pop] of POPS) {
+    if (pop === except) continue;
+    $(pop).classList.remove("open");
+    $(pill).setAttribute("aria-expanded", "false");
   }
-  const body = document.createElement("div");
-  body.className = "body";
-  if (text) render(body, text);
-  wrap.appendChild(body);
-  log.appendChild(wrap);
-  log.scrollTop = log.scrollHeight;
-  return body;
+}
+for (const [pill, pop] of POPS) {
+  $(pill).addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = $(pop).classList.contains("open");
+    closePops();
+    if (!open) { $(pop).classList.add("open"); $(pill).setAttribute("aria-expanded", "true"); }
+  });
+  $(pop).addEventListener("click", (e) => e.stopPropagation());
+}
+document.addEventListener("click", () => closePops());
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePops(); });
+
+/* The dir popover hangs off the header chip, so it needs its own anchoring. */
+$("dirPop").style.bottom = "auto";
+function placeDirPop() {
+  const r = $("dirChip").getBoundingClientRect();
+  Object.assign($("dirPop").style, { position: "fixed", top: (r.bottom + 6) + "px", left: r.left + "px" });
+}
+$("dirChip").addEventListener("click", placeDirPop);
+addEventListener("resize", () => closePops());
+
+/* ---------- rendering the menus ---------- */
+
+function renderMenu(host, options, current, onPick) {
+  host.innerHTML = "";
+  for (const o of options) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "item";
+    b.innerHTML = `<span class="tick">${o.v === current ? TICK : ""}</span>
+                   <span class="label">${esc(o.label)}</span>
+                   <span class="sub">${esc(o.sub || "")}</span>`;
+    b.onclick = () => { onPick(o.v); closePops(); };
+    host.appendChild(b);
+  }
 }
 
-// ---- accounts ------------------------------------------------------
+function syncPills() {
+  $("modelLabel").textContent = MODELS.find(m => m.v === state.model).label;
+  $("modeLabel").textContent = MODES.find(m => m.v === state.mode).label;
+  $("toolsLabel").textContent = TOOLSETS.find(t => t.v === state.tools).label;
+  $("effortLabel").textContent = EFFORT_LABEL[state.effort];
+  $("effortRange").value = String(EFFORTS.indexOf(state.effort));
+  $("effortHint").textContent = state.effort
+    ? "Mehr Aufwand heißt langsamer, aber gründlicher."
+    : "Claude wählt den Aufwand selbst.";
 
-function barClass(pct) { return pct >= 90 ? "fill full" : pct >= 75 ? "fill hot" : "fill"; }
+  renderMenu($("modelItems"), MODELS, state.model, v => { state.model = v; save("model"); syncPills(); });
+  renderMenu($("modeItems"), MODES, state.mode, v => { state.mode = v; save("mode"); syncPills(); });
+  renderMenu($("toolsItems"), TOOLSETS, state.tools, v => { state.tools = v; save("tools"); syncPills(); });
 
-function bar(label, w) {
-  if (!w || typeof w.pct !== "number") return "";
-  return `<div class="bar-row"><span>${label}</span>
-    <span class="track"><span class="${barClass(w.pct)}" style="width:${Math.min(100, w.pct)}%"></span></span>
-    <span>${Math.round(w.pct)}%</span></div>`;
+  // Only warn where the combination actually removes a guard rail.
+  const hint = $("modeHint"), pill = $("modePill");
+  pill.classList.remove("on", "warn"); hint.classList.remove("bad");
+  if (state.tools === "none") {
+    hint.textContent = state.mode === "plan"
+      ? "Plan-Modus wirkt erst mit Werkzeugen."
+      : "Ohne Werkzeuge hat der Modus keine Wirkung.";
+  } else if (state.mode === "") {
+    hint.textContent = "Rückfragen können hier nicht beantwortet werden — wähle einen Modus.";
+    hint.classList.add("bad"); pill.classList.add("warn");
+  } else if (state.mode === "dontAsk" && state.tools === "all") {
+    hint.textContent = "Claude führt Befehle und Änderungen ohne Rückfrage aus.";
+    hint.classList.add("bad"); pill.classList.add("warn");
+  } else if (state.mode === "plan") {
+    hint.textContent = "Claude plant nur, ohne etwas zu ändern."; pill.classList.add("on");
+  } else { hint.textContent = ""; }
 }
+
+$("effortRange").oninput = (e) => {
+  state.effort = EFFORTS[+e.target.value]; save("effort"); syncPills();
+};
+
+/* ---------- messages ---------- */
+
+function addTurn(cls, text) {
+  $("empty")?.remove();
+  const t = document.createElement("div");
+  t.className = "turn " + cls;
+  const b = document.createElement("div");
+  b.className = "bubble";
+  if (text) renderText(b, text);
+  t.appendChild(b);
+  log.appendChild(t);
+  scrollDown();
+  return b;
+}
+function renderText(el, text) {
+  const parts = text.split(/```/);
+  el.innerHTML = parts.map((p, i) =>
+    i % 2 ? `<pre>${esc(p.replace(/^[a-z]*\n/i, ""))}</pre>` : esc(p)).join("");
+}
+function scrollDown() { document.querySelector("main").scrollTop = 1e9; }
+
+/* ---------- accounts ---------- */
+
+function pctClass(p) { return p >= 90 ? "pct full" : p >= 75 ? "pct hot" : "pct"; }
 
 async function loadAccounts() {
-  const box = $("accounts");
   let data;
-  try {
-    data = await (await fetch("/api/accounts")).json();
-  } catch (e) {
-    box.innerHTML = `<div class="note">Konten nicht abrufbar: ${esc(String(e))}</div>`;
-    return;
-  }
-  if (data.error) {
-    box.innerHTML = `<div class="note">${esc(data.error)}</div>`;
-    return;
-  }
+  try { data = await (await fetch("/api/accounts")).json(); } catch { return; }
+  const box = $("accounts");
+  if (data.error) { box.textContent = ""; return; }
   box.innerHTML = "";
   for (const a of data.accounts || []) {
-    const btn = document.createElement("button");
-    btn.className = "acct" + (a.active ? " active" : "");
-    btn.disabled = a.active || busy;
-    btn.innerHTML = `
-      <div class="acct-top">
-        <span class="acct-name">${esc(a.alias || ("Konto " + a.number))}</span>
-        ${a.active ? '<span class="acct-badge">aktiv</span>' : ""}
-      </div>
-      <div class="acct-mail">${esc(a.email || "")}</div>
-      <div class="bars">${bar("5h", a.usage?.fiveHour)}${bar("7d", a.usage?.sevenDay)}</div>`;
-    btn.onclick = () => switchTo(a.alias || String(a.number), a.email);
-    box.appendChild(btn);
+    const b = document.createElement("button");
+    b.className = "acct";
+    b.setAttribute("aria-current", a.active ? "true" : "false");
+    b.disabled = a.active || busy;
+    b.title = a.email || "";
+    const p = a.usage?.fiveHour?.pct;
+    b.innerHTML = `<span class="dot"></span>
+      <span>${esc(a.alias || ("Konto " + a.number))}</span>
+      ${typeof p === "number" ? `<span class="${pctClass(p)}">${Math.round(p)}%</span>` : ""}`;
+    b.onclick = () => switchTo(a.alias || String(a.number), a.email);
+    box.appendChild(b);
   }
 }
 
 async function switchTo(target, email) {
   if (busy) return;
-  busy = true;
-  await loadAccounts();
+  busy = true; loadAccounts();
   try {
     const res = await (await fetch("/api/switch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ account: target }),
     })).json();
-    if (res.error) addMsg("err", null, "Wechsel fehlgeschlagen: " + res.error);
-    else addMsg("sys", null, `Konto gewechselt auf ${email || target}. Ab der nächsten Nachricht zahlt dieses Konto.`);
-  } catch (e) {
-    addMsg("err", null, "Wechsel fehlgeschlagen: " + String(e));
-  } finally {
-    busy = false;
-    loadAccounts();
+    if (res.error) addTurn("note bad", "Wechsel fehlgeschlagen: " + res.error);
+    else addTurn("note", `Konto: ${email || target} — ab der nächsten Nachricht`);
+  } catch (e) { addTurn("note bad", String(e)); }
+  finally { busy = false; loadAccounts(); }
+}
+
+/* ---------- working directory ---------- */
+
+function applyContext(d) {
+  ctx = d;
+  const parts = d.cwd.split(/[\\/]/);
+  $("dirLabel").textContent = parts.slice(-2).join("\\") || d.cwd;
+  $("dirChip").title = d.cwd;
+  $("dirInput").value = d.cwd;
+
+  const host = $("dirItems");
+  host.innerHTML = "";
+  if (d.parent) {
+    const up = document.createElement("button");
+    up.type = "button"; up.className = "item";
+    up.innerHTML = `<span class="tick">↑</span><span class="label">übergeordnet</span>`;
+    up.onclick = () => { closePops(); changeDir(d.parent); };
+    host.appendChild(up);
+  }
+  for (const name of d.subdirs || []) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "item";
+    b.innerHTML = `<span class="tick"></span><span class="label">${esc(name)}</span>`;
+    b.onclick = () => { closePops(); changeDir(d.cwd.replace(/[\\/]$/, "") + "\\" + name); };
+    host.appendChild(b);
   }
 }
 
-// ---- chat ----------------------------------------------------------
+async function changeDir(path) {
+  if (busy || !path) return;
+  const hint = $("dirHint");
+  try {
+    const d = await (await fetch("/api/cwd", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd: path }),
+    })).json();
+    if (d.error) { hint.textContent = d.error; hint.classList.add("bad"); return; }
+    hint.textContent = "Ein Wechsel startet ein neues Gespräch.";
+    hint.classList.remove("bad");
+    applyContext(d);
+    // A conversation is filed under the directory it ran in, so it cannot be
+    // resumed from another one. Start fresh rather than fail mid-turn.
+    sessionId = null;
+    addTurn("note", "Verzeichnis: " + d.cwd + " — neues Gespräch");
+  } catch (e) { hint.textContent = String(e); hint.classList.add("bad"); }
+}
+
+$("dirGo").onclick = () => { const v = $("dirInput").value.trim(); closePops(); changeDir(v); };
+$("dirInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); $("dirGo").click(); }
+});
+
+/* ---------- sending ---------- */
 
 $("form").onsubmit = async (ev) => {
   ev.preventDefault();
   const input = $("input");
   const text = input.value.trim();
   if (!text || busy) return;
+  closePops();
 
-  addMsg("user", "Du", text);
+  addTurn("user", text);
   input.value = ""; input.style.height = "auto";
   busy = true; $("send").disabled = true; loadAccounts();
 
-  const body = addMsg("assistant", "Claude", "");
-  body.classList.add("cursor");
-  let acc = "";
-  let meta = null;
-  let resolved = null;
+  const bubble = addTurn("claude", "");
+  bubble.classList.add("cursor");
+  let acc = "", meta = null, resolved = null;
 
   try {
     const res = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         message: text, sessionId,
-        tools: $("tools").value,
-        model: $("model").value,
-        effort: $("effort").value,
-        permissionMode: $("mode").value,
+        tools: state.tools, model: state.model,
+        effort: state.effort, permissionMode: state.mode,
       }),
     });
     const reader = res.body.getReader();
@@ -316,44 +539,31 @@ $("form").onsubmit = async (ev) => {
       const frames = buf.split("\n\n");
       buf = frames.pop();
       for (const frame of frames) {
-        const nameLine = frame.match(/^event: (.+)$/m);
-        const dataLine = frame.match(/^data: (.*)$/m);
-        if (!nameLine || !dataLine) continue;
-        let payload = {};
-        try { payload = JSON.parse(dataLine[1]); } catch { }
-        const name = nameLine[1];
-
-        if (name === "session") sessionId = payload.sessionId;
-        else if (name === "info") resolved = payload;
-        else if (name === "text") { acc += payload.text; render(body, acc); log.scrollTop = log.scrollHeight; }
-        else if (name === "tool") { acc += `\n[Werkzeug: ${payload.name}]\n`; render(body, acc); }
-        else if (name === "limit") {
-          const t = payload.rateLimitType, s = payload.status;
-          if (s && s !== "allowed") $("hint").textContent = `Limit (${t}): ${s}`;
-        } else if (name === "done") {
-          meta = payload;
-          if (!acc && payload.result) { acc = payload.result; render(body, acc); }
-        } else if (name === "error") {
-          addMsg("err", null, payload.message || "Unbekannter Fehler");
-        }
+        const n = frame.match(/^event: (.+)$/m), d = frame.match(/^data: (.*)$/m);
+        if (!n || !d) continue;
+        let p = {};
+        try { p = JSON.parse(d[1]); } catch { }
+        const name = n[1];
+        if (name === "session") sessionId = p.sessionId;
+        else if (name === "info") resolved = p;
+        else if (name === "text") { acc += p.text; renderText(bubble, acc); scrollDown(); }
+        else if (name === "tool") { acc += `\n· ${p.name}\n`; renderText(bubble, acc); }
+        else if (name === "done") { meta = p; if (!acc && p.result) { acc = p.result; renderText(bubble, acc); } }
+        else if (name === "error") addTurn("note bad", p.message || "Unbekannter Fehler");
       }
     }
-  } catch (e) {
-    addMsg("err", null, String(e));
-  } finally {
-    body.classList.remove("cursor");
+  } catch (e) { addTurn("note bad", String(e)); }
+  finally {
+    bubble.classList.remove("cursor");
     if (meta) {
       const m = document.createElement("div");
       m.className = "meta";
       const secs = meta.durationMs ? (meta.durationMs / 1000).toFixed(1) + " s" : "";
       const cost = typeof meta.cost === "number" ? "$" + meta.cost.toFixed(4) : "";
-      // The model the CLI actually resolved, not the one we requested.
-      const mdl = resolved?.model || "";
-      m.textContent = [mdl, secs, cost].filter(Boolean).join(" · ");
-      body.parentElement.appendChild(m);
+      m.textContent = [resolved?.model || "", secs, cost].filter(Boolean).join(" · ");
+      bubble.parentElement.appendChild(m);
     }
-    busy = false; $("send").disabled = false;
-    loadAccounts();
+    busy = false; $("send").disabled = false; loadAccounts(); scrollDown();
   }
 };
 
@@ -362,111 +572,16 @@ $("input").addEventListener("keydown", (e) => {
 });
 $("input").addEventListener("input", function () {
   this.style.height = "auto";
-  this.style.height = Math.min(this.scrollHeight, 190) + "px";
+  this.style.height = Math.min(this.scrollHeight, 220) + "px";
 });
 
-// ---- session options ------------------------------------------------
+/* ---------- boot ---------- */
 
-const OPTS = ["model", "effort", "tools", "mode"];
-
-/** Warn only where the combination actually removes a guard rail. */
-function describeMode() {
-  const note = $("modeNote");
-  const tools = $("tools").value, mode = $("mode").value;
-  note.classList.remove("bad");
-  if (tools === "none") {
-    note.textContent = mode === "plan"
-      ? "Plan-Modus wirkt erst mit Werkzeugen."
-      : "Ohne Werkzeuge hat der Modus keine Wirkung.";
-    return;
-  }
-  if (mode === "dontAsk" && tools === "all") {
-    note.textContent = "Claude führt Befehle und Änderungen ohne Rückfrage aus.";
-    note.classList.add("bad");
-    return;
-  }
-  if (mode === "" && tools !== "none") {
-    note.textContent = "Rückfragen können hier nicht beantwortet werden — wähle einen Modus.";
-    note.classList.add("bad");
-    return;
-  }
-  note.textContent = mode === "plan" ? "Claude plant nur, ohne etwas zu ändern." : "";
-}
-
-for (const id of OPTS) {
-  const el = $(id);
-  const saved = localStorage.getItem("ui." + id);
-  if (saved !== null && [...el.options].some(o => o.value === saved)) el.value = saved;
-  el.addEventListener("change", () => {
-    localStorage.setItem("ui." + id, el.value);
-    describeMode();
-  });
-}
-describeMode();
-
-$("newChat").onclick = () => {
-  sessionId = null;
-  log.innerHTML = "";
-  addMsg("sys", null, "Neues Gespräch. Das aktive Konto bleibt unverändert.");
-};
-
-// ---- working directory --------------------------------------------
-
-function applyContext(d) {
-  $("cwd").textContent = d.cwd;
-  $("cwdInput").value = d.cwd;
-  const sel = $("dirs");
-  sel.innerHTML = '<option value="">Unterordner wählen …</option>';
-  if (d.parent) {
-    const up = document.createElement("option");
-    up.value = d.parent; up.textContent = "⬑ übergeordnet";
-    sel.appendChild(up);
-  }
-  for (const name of d.subdirs || []) {
-    const o = document.createElement("option");
-    o.value = d.cwd.replace(/[\\/]$/, "") + "\\" + name;
-    o.textContent = name;
-    sel.appendChild(o);
-  }
-}
-
-async function changeDir(path) {
-  if (busy || !path) return;
-  const note = $("cwdNote");
-  try {
-    const res = await fetch("/api/cwd", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cwd: path }),
-    });
-    const d = await res.json();
-    if (d.error) {
-      note.textContent = d.error;
-      note.classList.add("bad");
-      return;
-    }
-    note.textContent = "Ein Wechsel startet ein neues Gespräch.";
-    note.classList.remove("bad");
-    applyContext(d);
-    // A session is filed under the directory it ran in, so it cannot be
-    // resumed from another one. Start fresh instead of failing mid-turn.
-    sessionId = null;
-    addMsg("sys", null, `Verzeichnis gewechselt: ${d.cwd} — neues Gespräch.`);
-  } catch (e) {
-    note.textContent = String(e);
-    note.classList.add("bad");
-  }
-}
-
-$("dirs").onchange = (e) => { const v = e.target.value; e.target.value = ""; changeDir(v); };
-$("cwdGo").onclick = () => changeDir($("cwdInput").value.trim());
-$("cwdInput").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") { e.preventDefault(); changeDir($("cwdInput").value.trim()); }
-});
-
-fetch("/api/context").then(r => r.json()).then(applyContext).catch(() => { });
+syncPills();
 loadAccounts();
+fetch("/api/context").then(r => r.json()).then(applyContext).catch(() => { });
 setInterval(() => { if (!busy) loadAccounts(); }, 30000);
+$("input").focus();
 </script>
 </body>
 </html>
