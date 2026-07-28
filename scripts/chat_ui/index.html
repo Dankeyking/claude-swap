@@ -128,11 +128,42 @@
   <h2>Konto</h2>
   <div id="accounts"></div>
 
+  <h2>Sitzung</h2>
+
+  <label class="opt" for="model">Modell</label>
+  <select id="model">
+    <option value="">Standard</option>
+    <option value="opus">Opus — am stärksten</option>
+    <option value="sonnet">Sonnet — ausgewogen</option>
+    <option value="haiku">Haiku — am schnellsten</option>
+    <option value="fable">Fable</option>
+  </select>
+
+  <label class="opt" for="effort">Denktiefe</label>
+  <select id="effort">
+    <option value="">Standard</option>
+    <option value="low">niedrig</option>
+    <option value="medium">mittel</option>
+    <option value="high">hoch</option>
+    <option value="xhigh">sehr hoch</option>
+    <option value="max">maximal</option>
+  </select>
+
   <label class="opt" for="tools">Werkzeuge</label>
   <select id="tools">
     <option value="none">Nur Chat — keine Werkzeuge</option>
     <option value="read">Lesend — Read, Grep, Web</option>
+    <option value="all">Alle Werkzeuge</option>
   </select>
+
+  <label class="opt" for="mode">Modus</label>
+  <select id="mode">
+    <option value="">Standard — fragt nach</option>
+    <option value="plan">Plan — erst planen, nichts ändern</option>
+    <option value="acceptEdits">Bearbeitungen annehmen</option>
+    <option value="dontAsk">Nicht fragen</option>
+  </select>
+  <div class="note" id="modeNote"></div>
 
   <button class="ghost" id="newChat">Neues Gespräch</button>
   <div class="note" id="note">Der Kontowechsel wirkt ab der nächsten Nachricht. Das Gespräch bleibt erhalten.</div>
@@ -261,12 +292,19 @@ $("form").onsubmit = async (ev) => {
   body.classList.add("cursor");
   let acc = "";
   let meta = null;
+  let resolved = null;
 
   try {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, sessionId, tools: $("tools").value }),
+      body: JSON.stringify({
+        message: text, sessionId,
+        tools: $("tools").value,
+        model: $("model").value,
+        effort: $("effort").value,
+        permissionMode: $("mode").value,
+      }),
     });
     const reader = res.body.getReader();
     const dec = new TextDecoder();
@@ -286,6 +324,7 @@ $("form").onsubmit = async (ev) => {
         const name = nameLine[1];
 
         if (name === "session") sessionId = payload.sessionId;
+        else if (name === "info") resolved = payload;
         else if (name === "text") { acc += payload.text; render(body, acc); log.scrollTop = log.scrollHeight; }
         else if (name === "tool") { acc += `\n[Werkzeug: ${payload.name}]\n`; render(body, acc); }
         else if (name === "limit") {
@@ -308,7 +347,9 @@ $("form").onsubmit = async (ev) => {
       m.className = "meta";
       const secs = meta.durationMs ? (meta.durationMs / 1000).toFixed(1) + " s" : "";
       const cost = typeof meta.cost === "number" ? "$" + meta.cost.toFixed(4) : "";
-      m.textContent = [secs, cost].filter(Boolean).join(" · ");
+      // The model the CLI actually resolved, not the one we requested.
+      const mdl = resolved?.model || "";
+      m.textContent = [mdl, secs, cost].filter(Boolean).join(" · ");
       body.parentElement.appendChild(m);
     }
     busy = false; $("send").disabled = false;
@@ -323,6 +364,45 @@ $("input").addEventListener("input", function () {
   this.style.height = "auto";
   this.style.height = Math.min(this.scrollHeight, 190) + "px";
 });
+
+// ---- session options ------------------------------------------------
+
+const OPTS = ["model", "effort", "tools", "mode"];
+
+/** Warn only where the combination actually removes a guard rail. */
+function describeMode() {
+  const note = $("modeNote");
+  const tools = $("tools").value, mode = $("mode").value;
+  note.classList.remove("bad");
+  if (tools === "none") {
+    note.textContent = mode === "plan"
+      ? "Plan-Modus wirkt erst mit Werkzeugen."
+      : "Ohne Werkzeuge hat der Modus keine Wirkung.";
+    return;
+  }
+  if (mode === "dontAsk" && tools === "all") {
+    note.textContent = "Claude führt Befehle und Änderungen ohne Rückfrage aus.";
+    note.classList.add("bad");
+    return;
+  }
+  if (mode === "" && tools !== "none") {
+    note.textContent = "Rückfragen können hier nicht beantwortet werden — wähle einen Modus.";
+    note.classList.add("bad");
+    return;
+  }
+  note.textContent = mode === "plan" ? "Claude plant nur, ohne etwas zu ändern." : "";
+}
+
+for (const id of OPTS) {
+  const el = $(id);
+  const saved = localStorage.getItem("ui." + id);
+  if (saved !== null && [...el.options].some(o => o.value === saved)) el.value = saved;
+  el.addEventListener("change", () => {
+    localStorage.setItem("ui." + id, el.value);
+    describeMode();
+  });
+}
+describeMode();
 
 $("newChat").onclick = () => {
   sessionId = null;

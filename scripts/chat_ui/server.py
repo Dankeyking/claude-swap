@@ -29,12 +29,28 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
-# Tool presets the UI offers. Empty string disables every tool, which also
-# removes the permission prompts a headless run cannot answer.
+# Everything below is an allowlist, not a suggestion: these values reach a
+# child process's argv, so the browser must never be able to name a flag or a
+# value we did not choose. Unknown keys fall back to the safe default rather
+# than being passed through.
+
+# Empty string disables every tool, which also removes the permission prompts a
+# headless run cannot answer. "default" hands over the full built-in set.
 TOOL_PRESETS = {
     "none": "",
     "read": "Read,Glob,Grep,WebFetch,WebSearch",
+    "all": "default",
 }
+
+# Aliases resolve to the current model of that family; see `claude --model`.
+MODELS = ("opus", "sonnet", "haiku", "fable")
+
+# `claude --permission-mode`. bypassPermissions is deliberately not offered:
+# it removes every guard rail at once, and "dontAsk" already covers the
+# unattended case the UI needs.
+PERMISSION_MODES = ("plan", "acceptEdits", "dontAsk", "auto", "manual")
+
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
 def find_executable(name: str) -> str:
@@ -133,11 +149,12 @@ class Backend:
             return {"error": (err or out or f"cswap switch failed (rc={rc})").strip()}
         return data
 
-    def chat(self, message: str, session_id: str | None, tools: str) -> queue.Queue:
+    def chat(self, message: str, session_id: str | None, opts: dict) -> queue.Queue:
         """Start a turn; returns a queue of (event_name, payload) tuples.
 
         ``None`` is pushed when the turn is over. The prompt goes in over stdin
         rather than argv so quotes and newlines in the message need no escaping.
+        Every option is checked against its allowlist before it reaches argv.
         """
         events: queue.Queue = queue.Queue()
         args = [
@@ -145,8 +162,18 @@ class Backend:
             "-p",
             "--output-format", "stream-json",
             "--verbose",
-            "--tools", TOOL_PRESETS.get(tools, ""),
+            "--tools", TOOL_PRESETS.get(str(opts.get("tools")), ""),
         ]
+        model = str(opts.get("model") or "")
+        if model in MODELS:
+            args += ["--model", model]
+        mode = str(opts.get("permissionMode") or "")
+        if mode in PERMISSION_MODES:
+            args += ["--permission-mode", mode]
+        effort = str(opts.get("effort") or "")
+        if effort in EFFORTS:
+            args += ["--effort", effort]
+
         if session_id:
             args += ["--resume", session_id]
         else:
@@ -215,7 +242,14 @@ class Backend:
     def _translate(msg: dict, events: queue.Queue) -> None:
         """Map one stream-json message onto a UI event. Unknown kinds are dropped."""
         kind = msg.get("type")
-        if kind == "assistant":
+        if kind == "system" and msg.get("subtype") == "init":
+            # What the CLI actually resolved, rather than what we asked for --
+            # the UI shows this so a rejected or aliased option is visible.
+            events.put((
+                "info",
+                {"model": msg.get("model"), "permissionMode": msg.get("permissionMode")},
+            ))
+        elif kind == "assistant":
             for block in msg.get("message", {}).get("content", []):
                 if block.get("type") == "text" and block.get("text"):
                     events.put(("text", {"text": block["text"]}))
@@ -278,7 +312,15 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/accounts":
             self._json(self.backend.accounts())
         elif self.path == "/api/context":
-            self._json(self.backend.list_dirs())
+            # Options ship with the context so the UI never hardcodes a value
+            # the server would reject.
+            self._json({
+                **self.backend.list_dirs(),
+                "models": list(MODELS),
+                "permissionModes": list(PERMISSION_MODES),
+                "efforts": list(EFFORTS),
+                "toolPresets": list(TOOL_PRESETS),
+            })
         else:
             self._send(404, b"not found", "text/plain; charset=utf-8")
 
@@ -320,9 +362,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
 
-        events = self.backend.chat(
-            message, body.get("sessionId") or None, str(body.get("tools") or "none")
-        )
+        events = self.backend.chat(message, body.get("sessionId") or None, body)
         while True:
             item = events.get()
             if item is None:
