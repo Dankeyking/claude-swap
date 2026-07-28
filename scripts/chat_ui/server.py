@@ -20,6 +20,7 @@ import json
 import os
 import queue
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -74,6 +75,64 @@ def find_executable(name: str) -> str:
         f"'{name}' nicht gefunden. Starte den Server aus einer Shell, in der "
         f"'{name}' funktioniert."
     )
+
+
+class Turn:
+    """One in-flight `claude` run: its event queue, and the means to end it.
+
+    A turn that nobody is reading any more still costs quota until the child
+    finishes, so the streaming handler cancels on a dead client. Cancellation
+    races the process start, hence the lock and the ``attach`` handshake: a
+    cancel arriving first sets the flag, and ``attach`` then reports False so
+    the caller kills the child it just created.
+    """
+
+    def __init__(self) -> None:
+        self.events: queue.Queue = queue.Queue()
+        self.cancelled = False
+        self._proc: subprocess.Popen | None = None
+        self._lock = threading.Lock()
+
+    def attach(self, proc: subprocess.Popen) -> bool:
+        """Register the child. False means the turn was already cancelled."""
+        with self._lock:
+            if self.cancelled:
+                return False
+            self._proc = proc
+            return True
+
+    def cancel(self) -> None:
+        """End the run and everything it spawned.
+
+        Killing the direct child is not enough. On Windows ``claude`` resolves
+        to ``claude.CMD``, so Python launches ``cmd.exe /c claude.CMD …`` and the
+        process doing the work -- and burning the quota -- is a *grandchild*.
+        ``proc.kill()`` reaps the wrapper and leaves that one running to
+        completion, which is precisely the cost this is meant to avoid. So kill
+        the tree: ``taskkill /T`` on Windows, the process group on POSIX (the
+        child is started in its own session for exactly this).
+        """
+        with self._lock:
+            self.cancelled = True
+            proc = self._proc
+        if not proc or proc.poll() is not None:
+            return
+        try:
+            if sys.platform == "win32":
+                subprocess.run(
+                    ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                    capture_output=True, timeout=10,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            else:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        finally:
+            try:
+                proc.kill()   # belt: the wrapper itself, if taskkill missed it
+            except OSError:
+                pass
 
 
 class Backend:
@@ -149,14 +208,20 @@ class Backend:
             return {"error": (err or out or f"cswap switch failed (rc={rc})").strip()}
         return data
 
-    def chat(self, message: str, session_id: str | None, opts: dict) -> queue.Queue:
-        """Start a turn; returns a queue of (event_name, payload) tuples.
+    def chat(self, message: str, session_id: str | None, opts: dict) -> "Turn":
+        """Start a turn. The returned handle carries its event queue and a kill.
 
-        ``None`` is pushed when the turn is over. The prompt goes in over stdin
-        rather than argv so quotes and newlines in the message need no escaping.
-        Every option is checked against its allowlist before it reaches argv.
+        ``None`` is pushed onto the queue when the turn is over. The prompt goes
+        in over stdin rather than argv so quotes and newlines in the message need
+        no escaping. Every option is checked against its allowlist before it
+        reaches argv.
+
+        The handle matters for cost: if nobody is listening any more -- the tab
+        closed, the user pressed stop -- the child must be killed, or it runs the
+        turn to completion and bills an answer no one will read.
         """
-        events: queue.Queue = queue.Queue()
+        turn = Turn()
+        events = turn.events
         args = [
             self.claude,
             "-p",
@@ -188,9 +253,17 @@ class Backend:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     cwd=str(self.cwd),
+                    # POSIX: own session, so cancelling can signal the whole
+                    # group. Windows gets the same reach via taskkill /T.
+                    start_new_session=(sys.platform != "win32"),
                 )
             except OSError as e:
                 events.put(("error", {"message": f"Start fehlgeschlagen: {e}"}))
+                events.put(None)
+                return
+            if not turn.attach(proc):
+                # Cancelled between the request arriving and the child starting.
+                proc.kill()
                 events.put(None)
                 return
             # stderr must be drained concurrently. Reading only stdout lets a
@@ -223,20 +296,21 @@ class Backend:
                     self._translate(msg, events)
                 proc.wait(timeout=30)
                 drainer.join(timeout=5)
-                if proc.returncode != 0:
+                if proc.returncode != 0 and not turn.cancelled:
                     detail = b"".join(stderr_chunks).decode("utf-8", "replace")
                     events.put((
                         "error",
                         {"message": detail.strip() or f"claude endete mit {proc.returncode}"},
                     ))
             except Exception as e:  # pragma: no cover - defensive
-                events.put(("error", {"message": f"{type(e).__name__}: {e}"}))
+                if not turn.cancelled:
+                    events.put(("error", {"message": f"{type(e).__name__}: {e}"}))
             finally:
                 events.put(None)
 
         events.put(("session", {"sessionId": session_id}))
         threading.Thread(target=pump, daemon=True).start()
-        return events
+        return turn
 
     @staticmethod
     def _translate(msg: dict, events: queue.Queue) -> None:
@@ -362,9 +436,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
 
-        events = self.backend.chat(message, body.get("sessionId") or None, body)
+        turn = self.backend.chat(message, body.get("sessionId") or None, body)
         while True:
-            item = events.get()
+            item = turn.events.get()
             if item is None:
                 break
             name, payload = item
@@ -373,7 +447,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(chunk)
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
-                return  # browser navigated away mid-turn
+                # Tab closed or stop pressed. Killing the child here is the
+                # whole point: otherwise it finishes the turn and bills an
+                # answer nobody will see.
+                turn.cancel()
+                return
         try:
             self.wfile.write(b"event: end\ndata: {}\n\n")
             self.wfile.flush()
