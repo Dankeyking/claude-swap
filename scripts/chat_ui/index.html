@@ -5,24 +5,52 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Claude Chat mit Kontowechsel</title>
 <style>
+  /* Every foreground below clears 4.5:1 against every surface it is used on --
+     measured, not eyeballed. The greys are deliberately staggered rather than
+     set to the minimum: solving for "lightest that passes" collapsed muted and
+     faint onto the same value and destroyed the hierarchy. The dark theme needs
+     its own ok/warn/danger; reusing the light ones left error text at 2.65:1. */
   :root {
     --bg: #faf9f7; --panel: #fff; --raised: #fff;
-    --line: #e6e3dd; --line-soft: #efedE8;
-    --ink: #1c1b19; --muted: #7a746a; --faint: #a29b90;
+    --line: #e6e3dd; --line-soft: #efede8;
+    --ink: #1c1b19; --muted: #5f5a51; --faint: #726d64;
     --accent: #c96442; --accent-ink: #8f4429;
     --pill: #f2f0eb; --pill-hover: #e9e6df;
-    --ok: #4a7c59; --warn: #b45309; --danger: #b42318;
+    --ok: #3d6a4a; --warn: #91430b; --danger: #b42318;
     --shadow: 0 8px 28px rgba(28,27,25,.13), 0 1px 3px rgba(28,27,25,.07);
     --radius: 14px;
+    --focus: #1d5fa8;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #1b1a18; --panel: #232220; --raised: #2b2926;
       --line: #38352f; --line-soft: #2f2d29;
-      --ink: #efedE8; --muted: #a29b90; --faint: #7a746a;
+      --ink: #efede8; --muted: #b0aaa0; --faint: #99948c;
       --accent: #d97757; --accent-ink: #e8a084;
       --pill: #2f2d29; --pill-hover: #3a3733;
+      --ok: #779d82; --warn: #ca8550; --danger: #d37d77;
       --shadow: 0 8px 28px rgba(0,0,0,.45), 0 1px 3px rgba(0,0,0,.3);
+      --focus: #8ab4e8;
+    }
+  }
+
+  /* Keyboard focus was invisible: outlines were switched off on the text
+     inputs, and everything else relied on the browser default that the flat
+     styling made hard to see. */
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  /* Motion is decorative here -- the blinking caret, the hover fades. Users who
+     ask for less must not get any of it. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .001ms !important;
+      scroll-behavior: auto !important;
     }
   }
   * { box-sizing: border-box; }
@@ -46,7 +74,7 @@
     display: inline-flex; align-items: center; gap: 7px;
     background: transparent; border: 1px solid transparent; border-radius: 999px;
     padding: 5px 11px; cursor: pointer; font-size: 13px; color: var(--muted);
-    max-width: 340px; transition: background .12s, color .12s, border-color .12s;
+    max-width: 340px; transition: background .16s, color .16s, border-color .16s;
   }
   .chip:hover { background: var(--pill); color: var(--ink); }
   .chip .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -55,7 +83,7 @@
     display: inline-flex; align-items: center; gap: 8px;
     background: var(--pill); border: 1px solid transparent; border-radius: 999px;
     padding: 5px 12px 5px 10px; cursor: pointer; font-size: 13px;
-    transition: background .12s, border-color .12s;
+    transition: background .16s, border-color .16s;
   }
   .acct:hover:not(:disabled) { background: var(--pill-hover); }
   .acct[aria-current="true"] { background: var(--raised); border-color: var(--line); }
@@ -182,7 +210,7 @@
     position: absolute; top: 7px; right: 7px; border: 1px solid var(--line);
     background: var(--bg); color: var(--muted); border-radius: 6px;
     padding: 3px 8px; font-size: 11.5px; cursor: pointer; opacity: 0;
-    transition: opacity .12s, color .12s;
+    transition: opacity .16s, color .16s;
   }
   .md pre:hover .copy, .copy:focus-visible { opacity: 1; }
   .copy:hover { color: var(--ink); }
@@ -234,7 +262,7 @@
     max-width: 760px; margin: 0 auto; position: relative;
     background: var(--panel); border: 1px solid var(--line);
     border-radius: var(--radius); box-shadow: 0 1px 2px rgba(28,27,25,.05);
-    transition: border-color .12s;
+    transition: border-color .16s;
   }
   .composer:focus-within { border-color: var(--faint); }
   .input-row { display: flex; align-items: flex-end; gap: 8px; padding: 12px 12px 0; }
@@ -247,7 +275,7 @@
   .send {
     flex: none; width: 30px; height: 30px; border-radius: 8px; border: 0;
     background: var(--accent); color: #fff; cursor: pointer; display: grid;
-    place-items: center; transition: opacity .12s;
+    place-items: center; transition: opacity .16s;
   }
   .send:disabled { opacity: .35; cursor: default; }
   .send svg { width: 15px; height: 15px; }
@@ -258,7 +286,7 @@
   .pill {
     display: inline-flex; align-items: center; gap: 5px; background: transparent;
     border: 0; border-radius: 8px; padding: 5px 9px; cursor: pointer;
-    font-size: 13px; color: var(--muted); transition: background .12s, color .12s;
+    font-size: 13px; color: var(--muted); transition: background .16s, color .16s;
   }
   .pill:hover, .pill[aria-expanded="true"] { background: var(--pill); color: var(--ink); }
   .pill.on { color: var(--ok); }
@@ -324,6 +352,30 @@
     padding: 0 12px; cursor: pointer; font-size: 13px;
   }
   .pathrow button:hover { background: var(--pill); }
+
+  /* ---------- narrow viewports ----------
+     There were no breakpoints at all. The rail is a fixed 268px, so on a phone
+     it squeezed the conversation into a column of broken words. Below 900px it
+     becomes an overlay and starts closed; below 640px the header sheds what it
+     can spare. */
+  @media (max-width: 900px) {
+    .rail {
+      position: fixed; top: 0; right: 0; bottom: 0; z-index: 50;
+      width: min(310px, 86vw); background: var(--panel);
+      border-left: 1px solid var(--line); box-shadow: var(--shadow);
+    }
+  }
+  @media (max-width: 640px) {
+    header { padding: 8px 12px; gap: 6px; }
+    .total { display: none; }          /* the account pills carry the numbers */
+    .chip { max-width: 42vw; }
+    .col { padding: 20px 14px 8px; }
+    footer { padding: 0 14px 16px; }
+    .turn.user .bubble { max-width: 100%; }
+    .bar { gap: 2px; }
+    .pill { padding: 5px 7px; }
+    #cmdPop, #attachPop, .pop { max-width: calc(100vw - 28px); }
+  }
 </style>
 </head>
 <body>
@@ -341,7 +393,8 @@
   <div class="spacer"></div>
   <span class="total" id="total" title="Kosten dieser Sitzung"></span>
   <div id="accounts" style="display:flex;gap:6px"></div>
-  <button class="chip" id="railToggle" title="Verlauf ein- oder ausblenden" aria-label="Verlauf">
+  <button class="chip" id="railToggle" title="Verlauf ein- oder ausblenden"
+          aria-label="Verlauf" aria-pressed="true">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
          width="15" height="15" aria-hidden="true">
       <path d="M4 6h16M4 12h16M4 18h10"/>
@@ -1369,12 +1422,23 @@ $("scopeDir").onclick = () => setScope("dir");
 $("scopeAll").onclick = () => setScope("all");
 setScope(convScope);
 
+function syncRailToggle() {
+  const hidden = document.body.classList.contains("no-rail");
+  $("railToggle").setAttribute("aria-pressed", String(!hidden));
+}
 $("railToggle").onclick = () => {
   const hidden = document.body.classList.toggle("no-rail");
   localStorage.setItem("ui.rail", hidden ? "off" : "on");
+  syncRailToggle();
   if (!hidden) loadConversations();
 };
-if (localStorage.getItem("ui.rail") === "off") document.body.classList.add("no-rail");
+// Closed by default on a narrow viewport, where the rail overlays the
+// conversation — unless the user has explicitly turned it on before.
+if (localStorage.getItem("ui.rail") === "off"
+    || (innerWidth < 900 && localStorage.getItem("ui.rail") !== "on")) {
+  document.body.classList.add("no-rail");
+}
+syncRailToggle();
 
 document.addEventListener("keydown", (e) => {
   // Ctrl+K jumps to the history search, Alt+N starts a conversation. Alt+N
