@@ -52,6 +52,18 @@ echten Bericht). Ein `/` in der Eingabe öffnet die Palette; die Liste stammt au
 dem `slash_commands`-Feld des Init-Events der CLI und ist ab der ersten
 Nachricht im jeweiligen Verzeichnis exakt.
 
+**Dateien und Bilder** über „+" oder per Ziehen-und-Ablegen ins Fenster. Sie
+werden nach `~/.claude-swap-backup/chat-uploads/` gelegt — bewusst außerhalb des
+Projekts — und als absoluter `@pfad` eingefügt. Das genügt: `@pfad` wird von der
+CLI selbst in den Prompt expandiert, gemessen auch bei abgeschalteten
+Werkzeugen und einschließlich Bildern. Hochgeladenes bleibt liegen und darf
+jederzeit gelöscht werden.
+
+> **Zum Modus:** `dontAsk` heißt nicht „ohne Rückfrage ausführen", sondern
+> *ablehnen* statt fragen — es ist die restriktive Wahl. Wer unbeaufsichtigt
+> Werkzeuge laufen lassen will, braucht „Alles freigeben"
+> (`bypassPermissions`).
+
 ## `desktop_profiles.py` — ein Profil je Konto für die Desktop-App
 
 Jedes mit `--user-data-dir` gestartete Electron-Profil hat einen eigenen

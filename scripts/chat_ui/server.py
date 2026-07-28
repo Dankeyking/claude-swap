@@ -49,10 +49,15 @@ TOOL_PRESETS = {
 # Aliases resolve to the current model of that family; see `claude --model`.
 MODELS = ("opus", "sonnet", "haiku", "fable")
 
-# `claude --permission-mode`. bypassPermissions is deliberately not offered:
-# it removes every guard rail at once, and "dontAsk" already covers the
-# unattended case the UI needs.
-PERMISSION_MODES = ("plan", "acceptEdits", "dontAsk", "auto", "manual")
+# `claude --permission-mode`. Note what "dontAsk" actually does: it does not
+# proceed silently, it *denies* anything that would need a prompt ("denied
+# because Claude Code is running in don't ask mode"). So it is the restrictive
+# option, not the permissive one. bypassPermissions is the permissive one, and
+# it is offered because leaving it out made the unattended case impossible --
+# the UI simply had no mode in which a tool call could succeed.
+PERMISSION_MODES = (
+    "plan", "acceptEdits", "dontAsk", "auto", "manual", "bypassPermissions",
+)
 
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
@@ -476,6 +481,30 @@ class Backend:
         hits = [p for p in paths if q in p.lower()] if q else paths
         return {"files": hits[:limit], "total": len(hits), "capped": capped}
 
+    # Uploads land outside the project on purpose: dropping a file into a chat
+    # should not leave artefacts in a repository. Absolute `@` paths were
+    # measured to work, so nothing has to live under the working directory.
+    UPLOAD_DIR = Path.home() / ".claude-swap-backup" / "chat-uploads"
+    MAX_UPLOAD = 25 * 1024 * 1024
+
+    def save_upload(self, name: str, data: bytes) -> dict:
+        """Store an uploaded file and return the path to reference it by.
+
+        The client-supplied name is treated as untrusted: only its final
+        component is kept, anything outside a conservative character set is
+        replaced, and a short random prefix keeps two uploads of the same name
+        apart. Nothing from the request can steer where the file lands.
+        """
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", Path(name).name).strip("._") or "datei"
+        safe = safe[:80]
+        try:
+            self.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+            target = self.UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}-{safe}"
+            target.write_bytes(data)
+        except OSError as e:
+            return {"error": f"Speichern fehlgeschlagen: {e}"}
+        return {"path": str(target), "name": safe, "size": len(data)}
+
     def list_dirs(self) -> dict:
         """The current directory, its parent, and its immediate subdirectories."""
         try:
@@ -686,6 +715,22 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, data: dict, code: int = 200) -> None:
         self._send(code, json.dumps(data).encode("utf-8"), "application/json; charset=utf-8")
 
+    def _not_found(self) -> None:
+        """404 that a fetch can read.
+
+        An /api/ path answered with plain "not found" surfaced in the browser as
+        `SyntaxError: "not found" is not valid JSON`, which says nothing about
+        the cause -- usually a stale server process without the route. JSON with
+        the path in it points straight at it.
+        """
+        if self.path.startswith("/api/"):
+            self._json({
+                "error": f"Unbekannte Route {self.path.split('?')[0]} — "
+                         "läuft hier ein älterer Server?"
+            }, 404)
+        else:
+            self._send(404, b"nicht gefunden", "text/plain; charset=utf-8")
+
     def _body(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
         if not length:
@@ -735,7 +780,7 @@ class Handler(BaseHTTPRequestHandler):
                 "toolPresets": list(TOOL_PRESETS),
             })
         else:
-            self._send(404, b"not found", "text/plain; charset=utf-8")
+            self._not_found()
 
     def do_POST(self) -> None:
         if self.path == "/api/switch":
@@ -754,10 +799,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(result, 400)
                 return
             self._json(self.backend.list_dirs())
+        elif self.path.split("?")[0] == "/api/upload":
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0:
+                self._json({"error": "leerer Upload"}, 400)
+                return
+            if length > Backend.MAX_UPLOAD:
+                self._json({"error": "Datei zu groß (max. 25 MB)"}, 413)
+                return
+            name = parse_qs(urlparse(self.path).query).get("name", ["datei"])[0]
+            data = self.rfile.read(length)
+            result = self.backend.save_upload(name, data)
+            self._json(result, 400 if "error" in result else 200)
         elif self.path == "/api/chat":
             self._stream_chat()
         else:
-            self._send(404, b"not found", "text/plain; charset=utf-8")
+            self._not_found()
 
     def _stream_chat(self) -> None:
         body = self._body()

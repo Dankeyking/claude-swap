@@ -218,6 +218,16 @@
   @keyframes blink { 50% { opacity: 0; } }
   .empty { text-align: center; color: var(--faint); padding-top: 14vh; font-size: 15px; }
 
+  /* drop target */
+  body.dropping .composer { border-color: var(--accent); border-style: dashed; }
+  .drophint {
+    display: none; position: fixed; inset: 0; z-index: 60; pointer-events: none;
+    align-items: center; justify-content: center;
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    font-size: 15px; color: var(--muted);
+  }
+  body.dropping .drophint { display: flex; }
+
   /* ---------- composer ---------- */
   footer { padding: 0 24px 22px; }
   .composer {
@@ -339,6 +349,8 @@
   </button>
 </header>
 
+<div class="drophint" id="dropHint">Loslassen, um hinzuzufügen</div>
+
 <div class="shell">
 <div class="stage">
 <main>
@@ -348,6 +360,7 @@
 </main>
 
 <footer>
+  <input type="file" id="filePick" multiple hidden>
   <form class="composer" id="form">
     <div class="input-row">
       <textarea id="input" rows="1" placeholder="Nachricht an Claude …"></textarea>
@@ -386,6 +399,10 @@
     <!-- popovers -->
     <div class="pop left" id="attachPop" style="min-width:340px">
       <h3>Hinzufügen</h3>
+      <button type="button" class="item" id="attachUpload">
+        <span class="tick">↑</span>
+        <span class="label">Datei oder Bild hochladen …</span>
+      </button>
       <button type="button" class="item" id="attachSlash">
         <span class="tick">/</span>
         <span class="label">Slash-Befehle</span>
@@ -485,11 +502,14 @@ const MODELS = [
   { v: "haiku", label: "Haiku 4.5", sub: "am schnellsten" },
   { v: "fable", label: "Fable 5", sub: "" },
 ];
+// "dontAsk" denies rather than proceeds -- it is the restrictive option. Named
+// accordingly, because "Nicht fragen" read as the opposite of what it does.
 const MODES = [
   { v: "", label: "Standard", sub: "fragt nach" },
-  { v: "plan", label: "Plan", sub: "erst planen" },
-  { v: "acceptEdits", label: "Bearbeitungen annehmen", sub: "" },
-  { v: "dontAsk", label: "Nicht fragen", sub: "" },
+  { v: "plan", label: "Plan", sub: "nur planen" },
+  { v: "acceptEdits", label: "Bearbeitungen annehmen", sub: "Dateien ja, Befehle nein" },
+  { v: "dontAsk", label: "Nichts freigeben", sub: "lehnt Rückfragen ab" },
+  { v: "bypassPermissions", label: "Alles freigeben", sub: "ohne Rückfrage" },
 ];
 const TOOLSETS = [
   { v: "none", label: "Nur Chat", sub: "keine Werkzeuge" },
@@ -573,19 +593,27 @@ function syncPills() {
   renderMenu($("modeItems"), MODES, state.mode, v => { state.mode = v; save("mode"); syncPills(); });
   renderMenu($("toolsItems"), TOOLSETS, state.tools, v => { state.tools = v; save("tools"); syncPills(); });
 
-  // Only warn where the combination actually removes a guard rail.
+  // Red is reserved for the one combination that really removes the guard
+  // rails. The earlier version had this backwards: it warned about "dontAsk",
+  // which denies tool calls, and said nothing about bypassPermissions.
   const hint = $("modeHint"), pill = $("modePill");
   pill.classList.remove("on", "warn"); hint.classList.remove("bad");
   if (state.tools === "none") {
     hint.textContent = state.mode === "plan"
       ? "Plan-Modus wirkt erst mit Werkzeugen."
       : "Ohne Werkzeuge hat der Modus keine Wirkung.";
+  } else if (state.mode === "bypassPermissions") {
+    hint.textContent = state.tools === "all"
+      ? "Claude führt Befehle und Änderungen ohne Rückfrage aus."
+      : "Alles freigegeben — hier nur Lesezugriffe.";
+    if (state.tools === "all") { hint.classList.add("bad"); pill.classList.add("warn"); }
+  } else if (state.mode === "dontAsk") {
+    hint.textContent = "Werkzeuge werden abgelehnt statt erfragt — nichts wird ausgeführt.";
   } else if (state.mode === "") {
     hint.textContent = "Rückfragen können hier nicht beantwortet werden — wähle einen Modus.";
     hint.classList.add("bad"); pill.classList.add("warn");
-  } else if (state.mode === "dontAsk" && state.tools === "all") {
-    hint.textContent = "Claude führt Befehle und Änderungen ohne Rückfrage aus.";
-    hint.classList.add("bad"); pill.classList.add("warn");
+  } else if (state.mode === "acceptEdits") {
+    hint.textContent = "Dateiänderungen laufen durch, Befehle werden abgelehnt.";
   } else if (state.mode === "plan") {
     hint.textContent = "Claude plant nur, ohne etwas zu ändern."; pill.classList.add("on");
   } else { hint.textContent = ""; }
@@ -1025,6 +1053,63 @@ $("fileSearch").addEventListener("input", () => {
   clearTimeout(fileTimer);
   fileTimer = setTimeout(loadFiles, 130);
 });
+/* Uploading, rather than only referencing what is already in the directory.
+   The file is stored outside the project and inserted as an absolute `@` path;
+   both were measured to work, images included, even with tools switched off. */
+
+async function uploadFile(file) {
+  if (file.size > 25 * 1024 * 1024) {
+    addTurn("note bad", `${file.name}: zu groß (max. 25 MB)`);
+    return;
+  }
+  try {
+    const res = await fetch("/api/upload?name=" + encodeURIComponent(file.name), {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: await file.arrayBuffer(),
+    });
+    const d = await res.json();
+    if (d.error) { addTurn("note bad", `${file.name}: ${d.error}`); return; }
+    const inp = $("input");
+    const sep = inp.value && !inp.value.endsWith(" ") ? " " : "";
+    inp.value += sep + "@" + d.path + " ";
+    inp.dispatchEvent(new Event("input"));
+  } catch (e) {
+    addTurn("note bad", `${file.name}: ${e}`);
+  }
+}
+
+async function uploadAll(files) {
+  for (const f of files) await uploadFile(f);
+  $("input").focus();
+}
+
+$("attachUpload").onclick = () => { closePops(); $("filePick").click(); };
+$("filePick").addEventListener("change", async (e) => {
+  await uploadAll([...e.target.files]);
+  e.target.value = "";   // same file twice in a row must still fire
+});
+
+// Drag and drop anywhere in the window.
+let dragDepth = 0;
+addEventListener("dragenter", (e) => {
+  if (![...(e.dataTransfer?.types || [])].includes("Files")) return;
+  e.preventDefault();
+  if (++dragDepth === 1) document.body.classList.add("dropping");
+});
+addEventListener("dragover", (e) => {
+  if ([...(e.dataTransfer?.types || [])].includes("Files")) e.preventDefault();
+});
+addEventListener("dragleave", () => {
+  if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dropping"); }
+});
+addEventListener("drop", async (e) => {
+  if (![...(e.dataTransfer?.types || [])].includes("Files")) return;
+  e.preventDefault();
+  dragDepth = 0; document.body.classList.remove("dropping");
+  await uploadAll([...e.dataTransfer.files]);
+});
+
 $("attachSlash").onclick = () => {
   closePops();
   const inp = $("input");
