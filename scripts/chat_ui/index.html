@@ -97,6 +97,13 @@
     padding: 4px 8px; font-size: 12.5px; color: var(--muted); cursor: pointer;
   }
   .seg button[aria-pressed="true"] { background: var(--raised); color: var(--ink); }
+  .newbtn {
+    display: flex; align-items: center; justify-content: center; gap: 7px;
+    width: 100%; border: 1px solid var(--line); background: var(--panel);
+    border-radius: 9px; padding: 8px 10px; font-size: 13.5px; cursor: pointer;
+  }
+  .newbtn:hover { background: var(--pill); }
+  .newbtn svg { width: 15px; height: 15px; }
   .grp {
     font-size: 11px; color: var(--faint); padding: 12px 10px 4px;
     letter-spacing: .03em;
@@ -356,7 +363,8 @@
     </div>
 
     <div class="bar">
-      <button type="button" class="pill" id="newChat" title="Neues Gespräch" aria-label="Neues Gespräch">
+      <button type="button" class="pill" id="attachBtn" title="Hinzufügen"
+              aria-label="Hinzufügen" aria-expanded="false" aria-haspopup="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
       </button>
@@ -376,6 +384,21 @@
     </div>
 
     <!-- popovers -->
+    <div class="pop left" id="attachPop" style="min-width:340px">
+      <h3>Hinzufügen</h3>
+      <button type="button" class="item" id="attachSlash">
+        <span class="tick">/</span>
+        <span class="label">Slash-Befehle</span>
+      </button>
+      <div class="sep"></div>
+      <div class="pathrow">
+        <input id="fileSearch" type="search" spellcheck="false"
+               placeholder="Datei suchen …" aria-label="Datei suchen">
+      </div>
+      <div id="fileItems"></div>
+      <div class="hintline" id="fileHint"></div>
+    </div>
+
     <div class="pop" id="cmdPop" role="listbox" aria-label="Befehle">
       <h3>Befehle</h3>
       <div id="cmdItems"></div>
@@ -422,6 +445,13 @@
 </div>
 
 <aside class="rail">
+  <div class="railtop" style="padding-top:12px">
+    <button type="button" class="newbtn" id="newChat" title="Neues Gespräch (Alt+N)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      Neu
+    </button>
+  </div>
   <h2>Verlauf</h2>
   <div class="railtop">
     <input id="convSearch" type="search" spellcheck="false"
@@ -481,7 +511,7 @@ const save = (k) => localStorage.setItem("ui." + k, state[k]);
 
 const POPS = [["modePill", "modePop"], ["toolsPill", "toolsPop"],
               ["modelPill", "modelPop"], ["effortPill", "effortPop"],
-              ["dirChip", "dirPop"]];
+              ["dirChip", "dirPop"], ["attachBtn", "attachPop"]];
 
 function closePops(except) {
   for (const [pill, pop] of POPS) {
@@ -945,6 +975,62 @@ $("form").onsubmit = async (ev) => {
     setTimeout(loadConversations, 2500);
     loadCommands();   // the init event may have reported this directory's list
   }
+};
+
+/* ---------- attachments ----------
+   The "+" mirrors the app's add menu. What it can honestly offer here is a file
+   reference: `@path` is expanded by the CLI itself -- measured to work even
+   with every tool switched off -- so the file lands in the prompt either way. */
+
+let fileTimer = 0;
+
+async function loadFiles() {
+  const q = $("fileSearch").value.trim();
+  let d;
+  try { d = await (await fetch("/api/files?q=" + encodeURIComponent(q))).json(); }
+  catch { return; }
+  const host = $("fileItems");
+  host.innerHTML = "";
+  for (const f of d.files || []) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "item";
+    b.innerHTML = `<span class="tick">@</span><span class="label">${esc(f)}</span>`;
+    b.onclick = () => insertFile(f);
+    host.appendChild(b);
+  }
+  const shown = (d.files || []).length;
+  $("fileHint").textContent = !shown
+    ? (q ? "Keine Datei gefunden." : "Keine Dateien in diesem Verzeichnis.")
+    : d.total > shown
+      ? `${shown} von ${d.total}${d.capped ? "+" : ""} — weiter eingrenzen`
+      : "";
+}
+
+function insertFile(rel) {
+  const inp = $("input");
+  const sep = inp.value && !inp.value.endsWith(" ") ? " " : "";
+  inp.value += sep + "@" + rel + " ";
+  closePops();
+  inp.focus();
+  inp.dispatchEvent(new Event("input"));
+}
+
+$("attachBtn").addEventListener("click", () => {
+  if (!$("attachPop").classList.contains("open")) return;
+  $("fileSearch").value = "";
+  loadFiles();
+  setTimeout(() => $("fileSearch").focus(), 0);
+});
+$("fileSearch").addEventListener("input", () => {
+  clearTimeout(fileTimer);
+  fileTimer = setTimeout(loadFiles, 130);
+});
+$("attachSlash").onclick = () => {
+  closePops();
+  const inp = $("input");
+  inp.value = "/";
+  inp.focus();
+  inp.dispatchEvent(new Event("input"));
 };
 
 /* ---------- slash commands ----------

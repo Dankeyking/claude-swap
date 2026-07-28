@@ -25,6 +25,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -181,6 +182,8 @@ class Backend:
         # events. Project and plugin commands differ by directory, so this is
         # keyed by cwd rather than kept as one global list.
         self._commands: dict[str, list[str]] = {}
+        # (timestamp, relative paths, capped) per directory -- see list_files.
+        self._file_cache: dict[str, tuple[float, list[str], bool]] = {}
 
     def commands(self) -> dict:
         """Slash commands offered for the current directory.
@@ -422,6 +425,57 @@ class Backend:
             "truncated": truncated,
         }
 
+    # -- file references ---------------------------------------------------
+    #
+    # `@path` in a prompt is expanded by the CLI itself -- measured to work even
+    # with every tool disabled -- so offering files to insert is useful in plain
+    # chat mode, not just when Read is available.
+
+    # Directories never worth walking: heavy, generated, or not source.
+    SKIP_DIRS = frozenset({
+        ".git", ".hg", ".svn", "node_modules", ".venv", "venv", "__pycache__",
+        ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build",
+        ".next", ".nuxt", "target", ".idea", ".vscode", ".claude",
+    })
+    FILE_CACHE_TTL = 30.0
+    FILE_WALK_CAP = 6000
+
+    def list_files(self, query: str = "", limit: int = 60) -> dict:
+        """Relative paths under the working directory, filtered by ``query``.
+
+        Cached briefly per directory: the picker filters as the user types, and
+        re-walking the tree on every keystroke would be wasteful. The walk is
+        capped so a directory that turns out to be enormous cannot hang a
+        request; ``capped`` says so rather than pretending the list is complete.
+        """
+        key = str(self.cwd)
+        now = time.monotonic()
+        cached = self._file_cache.get(key)
+        if cached is None or now - cached[0] > self.FILE_CACHE_TTL:
+            paths: list[str] = []
+            capped = False
+            for root, dirs, names in os.walk(self.cwd):
+                dirs[:] = [d for d in dirs
+                           if d not in self.SKIP_DIRS and not d.startswith(".")]
+                for n in names:
+                    if n.startswith("."):
+                        continue
+                    rel = os.path.relpath(os.path.join(root, n), self.cwd)
+                    paths.append(rel.replace("\\", "/"))
+                    if len(paths) >= self.FILE_WALK_CAP:
+                        capped = True
+                        break
+                if capped:
+                    break
+            paths.sort(key=str.lower)
+            cached = (now, paths, capped)
+            self._file_cache[key] = cached
+
+        _, paths, capped = cached
+        q = query.strip().lower()
+        hits = [p for p in paths if q in p.lower()] if q else paths
+        return {"files": hits[:limit], "total": len(hits), "capped": capped}
+
     def list_dirs(self) -> dict:
         """The current directory, its parent, and its immediate subdirectories."""
         try:
@@ -655,6 +709,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(self.backend.accounts())
         elif self.path == "/api/commands":
             self._json(self.backend.commands())
+        elif self.path.split("?")[0] == "/api/files":
+            q = parse_qs(urlparse(self.path).query)
+            self._json(self.backend.list_files(q.get("q", [""])[0]))
         elif self.path.split("?")[0] == "/api/sessions":
             q = parse_qs(urlparse(self.path).query)
             scope = "all" if q.get("scope", ["dir"])[0] == "all" else "dir"
