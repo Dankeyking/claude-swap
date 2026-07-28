@@ -58,7 +58,7 @@
   .fill.full { background: var(--danger); }
 
   label.opt { display: block; font-size: 12px; color: var(--muted); margin: 4px 0 6px; }
-  select, button.ghost {
+  select, button.ghost, input[type=text] {
     width: 100%; font: inherit; font-size: 13px; padding: 7px 9px;
     border: 1px solid var(--line); border-radius: 8px;
     background: var(--panel); color: inherit;
@@ -66,6 +66,12 @@
   button.ghost { cursor: pointer; margin-top: 8px; }
   button.ghost:hover { border-color: var(--accent); }
   .note { font-size: 11px; color: var(--muted); margin-top: 14px; }
+  .note.bad { color: var(--danger); }
+  .row-inline { display: flex; gap: 6px; margin-top: 6px; }
+  .row-inline input[type=text] { flex: 1; min-width: 0; }
+  button.ghost.inline { width: auto; margin-top: 0; white-space: nowrap; }
+  aside h2 { margin-top: 20px; }
+  aside h2:first-of-type { margin-top: 0; }
 
   /* ---- chat ---- */
   main { display: flex; flex-direction: column; min-height: 0; }
@@ -109,7 +115,15 @@
 
 <aside>
   <h1>Claude Chat</h1>
+
+  <h2>Verzeichnis</h2>
   <div class="cwd" id="cwd">…</div>
+  <select id="dirs"><option value="">Unterordner wählen …</option></select>
+  <div class="row-inline">
+    <input id="cwdInput" type="text" spellcheck="false" placeholder="Pfad eingeben">
+    <button class="ghost inline" id="cwdGo">Los</button>
+  </div>
+  <div class="note" id="cwdNote">Ein Wechsel startet ein neues Gespräch.</div>
 
   <h2>Konto</h2>
   <div id="accounts"></div>
@@ -316,7 +330,61 @@ $("newChat").onclick = () => {
   addMsg("sys", null, "Neues Gespräch. Das aktive Konto bleibt unverändert.");
 };
 
-fetch("/api/context").then(r => r.json()).then(d => { $("cwd").textContent = d.cwd; }).catch(() => { });
+// ---- working directory --------------------------------------------
+
+function applyContext(d) {
+  $("cwd").textContent = d.cwd;
+  $("cwdInput").value = d.cwd;
+  const sel = $("dirs");
+  sel.innerHTML = '<option value="">Unterordner wählen …</option>';
+  if (d.parent) {
+    const up = document.createElement("option");
+    up.value = d.parent; up.textContent = "⬑ übergeordnet";
+    sel.appendChild(up);
+  }
+  for (const name of d.subdirs || []) {
+    const o = document.createElement("option");
+    o.value = d.cwd.replace(/[\\/]$/, "") + "\\" + name;
+    o.textContent = name;
+    sel.appendChild(o);
+  }
+}
+
+async function changeDir(path) {
+  if (busy || !path) return;
+  const note = $("cwdNote");
+  try {
+    const res = await fetch("/api/cwd", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd: path }),
+    });
+    const d = await res.json();
+    if (d.error) {
+      note.textContent = d.error;
+      note.classList.add("bad");
+      return;
+    }
+    note.textContent = "Ein Wechsel startet ein neues Gespräch.";
+    note.classList.remove("bad");
+    applyContext(d);
+    // A session is filed under the directory it ran in, so it cannot be
+    // resumed from another one. Start fresh instead of failing mid-turn.
+    sessionId = null;
+    addMsg("sys", null, `Verzeichnis gewechselt: ${d.cwd} — neues Gespräch.`);
+  } catch (e) {
+    note.textContent = String(e);
+    note.classList.add("bad");
+  }
+}
+
+$("dirs").onchange = (e) => { const v = e.target.value; e.target.value = ""; changeDir(v); };
+$("cwdGo").onclick = () => changeDir($("cwdInput").value.trim());
+$("cwdInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); changeDir($("cwdInput").value.trim()); }
+});
+
+fetch("/api/context").then(r => r.json()).then(applyContext).catch(() => { });
 loadAccounts();
 setInterval(() => { if (!busy) loadAccounts(); }, 30000);
 </script>

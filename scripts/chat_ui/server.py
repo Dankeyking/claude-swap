@@ -68,6 +68,40 @@ class Backend:
         self.cswap = find_executable("cswap")
         self.cwd = cwd
 
+    def set_cwd(self, raw: str) -> dict:
+        """Point new turns at another directory.
+
+        Claude Code files conversations under the directory they ran in, so a
+        session started elsewhere cannot be resumed from here. The caller drops
+        its session id on success — the UI turns a directory change into a new
+        conversation rather than letting a resume fail mid-turn.
+        """
+        try:
+            target = Path(raw).expanduser().resolve()
+        except (OSError, ValueError) as e:
+            return {"error": f"Ungueltiger Pfad: {e}"}
+        if not target.is_dir():
+            return {"error": f"Kein Verzeichnis: {target}"}
+        self.cwd = target
+        return {"cwd": str(target)}
+
+    def list_dirs(self) -> dict:
+        """The current directory, its parent, and its immediate subdirectories."""
+        try:
+            subdirs = sorted(
+                (p.name for p in self.cwd.iterdir() if p.is_dir() and not p.name.startswith(".")),
+                key=str.lower,
+            )
+        except OSError as e:
+            subdirs = []
+            _ = e
+        parent = self.cwd.parent
+        return {
+            "cwd": str(self.cwd),
+            "parent": str(parent) if parent != self.cwd else None,
+            "subdirs": subdirs[:200],
+        }
+
     def _run(self, args: list[str], timeout: int = 60) -> tuple[int, str, str]:
         """Run a command, decoding output as UTF-8 explicitly.
 
@@ -244,7 +278,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/accounts":
             self._json(self.backend.accounts())
         elif self.path == "/api/context":
-            self._json({"cwd": str(self.backend.cwd)})
+            self._json(self.backend.list_dirs())
         else:
             self._send(404, b"not found", "text/plain; charset=utf-8")
 
@@ -255,6 +289,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "kein Konto angegeben"}, 400)
                 return
             self._json(self.backend.switch(target))
+        elif self.path == "/api/cwd":
+            raw = str(self._body().get("cwd", "")).strip()
+            if not raw:
+                self._json({"error": "kein Pfad angegeben"}, 400)
+                return
+            result = self.backend.set_cwd(raw)
+            if "error" in result:
+                self._json(result, 400)
+                return
+            self._json(self.backend.list_dirs())
         elif self.path == "/api/chat":
             self._stream_chat()
         else:
