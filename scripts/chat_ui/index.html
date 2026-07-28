@@ -281,8 +281,13 @@
   }
   .send:disabled { opacity: .35; cursor: default; }
   .send svg { width: 15px; height: 15px; }
+  /* Which icon shows is decided here, not by a hidden attribute: on an inline
+     <svg> that attribute did not take, so both stacked in the grid and the
+     button rendered an arrow above a square. */
+  .send .i-stop { display: none; }
+  .send.stop .i-send { display: none; }
+  .send.stop .i-stop { display: block; width: 11px; height: 11px; }
   .send.stop { background: var(--ink); }
-  .send.stop svg { width: 11px; height: 11px; }
 
   .bar { display: flex; align-items: center; gap: 4px; padding: 6px 9px 9px; flex-wrap: wrap; }
   .pill {
@@ -439,11 +444,11 @@
     <div class="input-row">
       <textarea id="input" rows="1" placeholder="Nachricht an Claude …"></textarea>
       <button class="send" id="send" type="submit" title="Senden" aria-label="Senden">
-        <svg id="iconSend" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        <svg class="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M12 19V6M6 12l6-6 6 6"/>
         </svg>
-        <svg id="iconStop" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" hidden>
+        <svg class="i-stop" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <rect x="5" y="5" width="14" height="14" rx="2.5"/>
         </svg>
       </button>
@@ -1005,9 +1010,7 @@ function setBusy(on) {
   $("send").classList.toggle("stop", on);
   $("send").title = on ? "Abbrechen" : "Senden";
   $("send").setAttribute("aria-label", on ? "Abbrechen" : "Senden");
-  $("iconSend").hidden = on;
-  $("iconStop").hidden = !on;
-  $("log").setAttribute("aria-busy", String(on));
+  $("log").setAttribute("aria-busy", String(on));   // the .stop class swaps the icon
 }
 
 $("send").addEventListener("click", (e) => {
