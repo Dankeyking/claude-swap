@@ -489,6 +489,7 @@
         <span class="label">Slash-Befehle</span>
         <span class="key">/</span>
       </button>
+      <div class="hintline">Bilder auch mit Strg+V oder per Ziehen ins Fenster.</div>
       <div class="sep"></div>
       <div class="pathrow">
         <input id="fileSearch" type="search" spellcheck="false"
@@ -1192,6 +1193,27 @@ async function uploadAll(files) {
   for (const f of files) await uploadFile(f);
   $("input").focus();
 }
+
+/** A clipboard screenshot arrives as "image.png" every single time, so pastes
+    would be indistinguishable from each other in the input. Give those a
+    timestamp; leave a real filename (a file copied in Explorer) alone. */
+function namedForPaste(file) {
+  if (file.name && !/^image\.\w+$/i.test(file.name)) return file;
+  const ext = (file.type.split("/")[1] || "png").replace("jpeg", "jpg");
+  const t = new Date();
+  const stamp = [t.getHours(), t.getMinutes(), t.getSeconds()]
+    .map(n => String(n).padStart(2, "0")).join("");
+  return new File([file], `einfuegung-${stamp}.${ext}`, { type: file.type });
+}
+
+// Ctrl+V. Only acts when the clipboard actually carries files -- a plain text
+// paste must keep working normally, so preventDefault stays inside the guard.
+addEventListener("paste", async (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (!files.length) return;
+  e.preventDefault();
+  await uploadAll(files.map(namedForPaste));
+});
 
 $("attachUpload").onclick = () => { closePops(); $("filePick").click(); };
 $("filePick").addEventListener("change", async (e) => {
