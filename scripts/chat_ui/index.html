@@ -275,6 +275,22 @@
   .hintline { font-size: 12px; color: var(--muted); padding: 4px 10px 8px; line-height: 1.45; }
   .hintline.bad { color: var(--danger); }
 
+  #cmdPop { left: 0; right: 0; min-width: 0; max-height: 46vh; }
+  .cmd {
+    display: flex; align-items: baseline; gap: 10px; width: 100%;
+    background: transparent; border: 0; border-radius: 8px; padding: 7px 10px;
+    cursor: pointer; text-align: left;
+  }
+  .cmd[aria-selected="true"] { background: var(--pill); }
+  .cmd .n {
+    font-size: 13.5px; font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    white-space: nowrap;
+  }
+  .cmd .h {
+    font-size: 12px; color: var(--faint); flex: 1; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; text-align: right;
+  }
+
   .slider { padding: 10px 12px 6px; }
   .slider input { width: 100%; accent-color: var(--accent); }
   .slider .ends { display: flex; justify-content: space-between;
@@ -360,6 +376,11 @@
     </div>
 
     <!-- popovers -->
+    <div class="pop" id="cmdPop" role="listbox" aria-label="Befehle">
+      <h3>Befehle</h3>
+      <div id="cmdItems"></div>
+    </div>
+
     <div class="pop left" id="modePop">
       <h3>Modus</h3>
       <div id="modeItems"></div>
@@ -478,7 +499,10 @@ for (const [pill, pop] of POPS) {
   });
   $(pop).addEventListener("click", (e) => e.stopPropagation());
 }
-document.addEventListener("click", () => closePops());
+document.addEventListener("click", (e) => {
+  closePops();
+  if (!$("cmdPop").contains(e.target)) closeCmd();
+});
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePops(); });
 
 /* The dir popover hangs off the header chip, so it needs its own anchoring. */
@@ -798,7 +822,8 @@ async function changeDir(path) {
     // resumed from another one. Start fresh rather than fail mid-turn.
     sessionId = null;
     addTurn("note", "Verzeichnis: " + d.cwd + " — neues Gespräch");
-    loadConversations();   // history is per directory
+    loadConversations();   // history and commands are both per directory
+    loadCommands();
   } catch (e) { hint.textContent = String(e); hint.classList.add("bad"); }
 }
 
@@ -918,10 +943,93 @@ $("form").onsubmit = async (ev) => {
     // generated title a moment after the turn ends.
     loadConversations();
     setTimeout(loadConversations, 2500);
+    loadCommands();   // the init event may have reported this directory's list
   }
 };
 
+/* ---------- slash commands ----------
+   These are real: in print mode `/context` returns a report rather than an
+   echo, so the palette offers what the CLI itself listed for this directory. */
+
+let cmdAll = [];      // {name, description}
+let cmdHits = [];     // currently filtered
+let cmdIndex = 0;
+
+async function loadCommands() {
+  try {
+    const d = await (await fetch("/api/commands")).json();
+    cmdAll = d.commands || [];
+  } catch { cmdAll = []; }
+}
+
+/** The command token being typed, or null when the palette should stay shut.
+    Only a leading slash counts, and only until the first space -- once an
+    argument is being written the palette is out of the way. */
+function commandPrefix() {
+  const v = $("input").value;
+  if (!v.startsWith("/")) return null;
+  const token = v.slice(1);
+  if (/\s/.test(token)) return null;
+  return token;
+}
+
+function closeCmd() {
+  $("cmdPop").classList.remove("open");
+  cmdHits = [];
+}
+
+function renderCmd() {
+  const prefix = commandPrefix();
+  if (prefix === null || !cmdAll.length) { closeCmd(); return; }
+  const q = prefix.toLowerCase();
+  cmdHits = cmdAll.filter(c => c.name.toLowerCase().includes(q)).slice(0, 40);
+  if (!cmdHits.length) { closeCmd(); return; }
+  if (cmdIndex >= cmdHits.length) cmdIndex = 0;
+
+  const host = $("cmdItems");
+  host.innerHTML = "";
+  cmdHits.forEach((c, i) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "cmd"; b.role = "option";
+    b.setAttribute("aria-selected", String(i === cmdIndex));
+    b.innerHTML = `<span class="n">/${esc(c.name)}</span>
+                   <span class="h">${esc(c.description || "")}</span>`;
+    b.onmousedown = (e) => { e.preventDefault(); pickCmd(i); };
+    host.appendChild(b);
+  });
+  closePops("cmdPop");
+  $("cmdPop").classList.add("open");
+  host.children[cmdIndex]?.scrollIntoView({ block: "nearest" });
+}
+
+function pickCmd(i) {
+  const c = cmdHits[i];
+  if (!c) return;
+  // Insert, do not send: a command usually wants an argument, and the app
+  // behaves the same way.
+  $("input").value = "/" + c.name + " ";
+  closeCmd();
+  $("input").focus();
+  $("input").dispatchEvent(new Event("input"));
+}
+
+$("input").addEventListener("input", () => { cmdIndex = 0; renderCmd(); });
+$("input").addEventListener("blur", () => setTimeout(closeCmd, 120));
+
 $("input").addEventListener("keydown", (e) => {
+  const open = $("cmdPop").classList.contains("open") && cmdHits.length;
+  if (open) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault(); cmdIndex = (cmdIndex + 1) % cmdHits.length; renderCmd(); return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault(); cmdIndex = (cmdIndex - 1 + cmdHits.length) % cmdHits.length; renderCmd(); return;
+    }
+    if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+      e.preventDefault(); pickCmd(cmdIndex); return;
+    }
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeCmd(); return; }
+  }
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("form").requestSubmit(); }
 });
 $("input").addEventListener("input", function () {
@@ -1115,6 +1223,7 @@ document.addEventListener("keydown", (e) => {
 
 syncPills();
 loadAccounts();   // the history list is loaded by setScope() above
+loadCommands();
 fetch("/api/context").then(r => r.json()).then(applyContext).catch(() => { });
 setInterval(() => { if (!busy) loadAccounts(); }, 30000);
 $("input").focus();

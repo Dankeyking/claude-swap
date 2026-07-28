@@ -55,6 +55,39 @@ PERMISSION_MODES = ("plan", "acceptEdits", "dontAsk", "auto", "manual")
 
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
+# Slash commands work in print mode -- `/context` returns a real report, not an
+# echo -- so the composer offers them. The authoritative list per directory
+# comes from the CLI itself, in the `slash_commands` field of its init event,
+# and is cached once a turn has run there. Until then this seed is offered: the
+# built-ins observed in a real init event on this machine. It is deliberately
+# short, because guessing at commands that may not exist is worse than a list
+# that fills itself in after the first message.
+SEED_COMMANDS = (
+    "clear", "compact", "context", "usage", "cost", "model", "effort",
+    "config", "mcp", "agents", "init", "review", "doctor", "recap", "rename",
+)
+
+# Only for commands whose effect is not in doubt. A command without an entry is
+# listed without a description rather than with an invented one.
+COMMAND_HELP = {
+    "agents": "Unteragenten verwalten",
+    "clear": "Gespräch zurücksetzen",
+    "compact": "Verlauf zusammenfassen",
+    "config": "Einstellungen anzeigen oder ändern",
+    "context": "Kontextauslastung anzeigen",
+    "cost": "Kosten dieser Sitzung",
+    "doctor": "Installation prüfen",
+    "effort": "Denktiefe setzen",
+    "init": "CLAUDE.md für dieses Projekt anlegen",
+    "mcp": "MCP-Server verwalten",
+    "model": "Modell wechseln",
+    "recap": "Zusammenfassung des Gesprächs",
+    "rename": "Sitzung umbenennen",
+    "review": "Pull Request prüfen",
+    "security-review": "Sicherheitsprüfung der Änderungen",
+    "usage": "Nutzung und Limits anzeigen",
+}
+
 
 def find_executable(name: str) -> str:
     """Locate a CLI, falling back to the install locations used on Windows.
@@ -144,6 +177,27 @@ class Backend:
         self.claude = find_executable("claude")
         self.cswap = find_executable("cswap")
         self.cwd = cwd
+        # Slash commands the CLI reported per directory, learned from init
+        # events. Project and plugin commands differ by directory, so this is
+        # keyed by cwd rather than kept as one global list.
+        self._commands: dict[str, list[str]] = {}
+
+    def commands(self) -> dict:
+        """Slash commands offered for the current directory.
+
+        ``exact`` is False while only the seed list is known -- no turn has run
+        here yet, so the CLI has not had a chance to report its own.
+        """
+        known = self._commands.get(str(self.cwd))
+        names = known if known is not None else list(SEED_COMMANDS)
+        return {
+            "commands": [
+                {"name": n, "description": COMMAND_HELP.get(n, "")}
+                for n in names
+                if not n.startswith("__")   # internal plumbing, not for humans
+            ],
+            "exact": known is not None,
+        }
 
     def set_cwd(self, raw: str) -> dict:
         """Point new turns at another directory.
@@ -501,6 +555,12 @@ class Backend:
                         msg = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+                    if msg.get("type") == "system" and msg.get("subtype") == "init":
+                        # The CLI names its own commands here; nothing else has
+                        # an authoritative list for this directory.
+                        found = msg.get("slash_commands")
+                        if isinstance(found, list):
+                            self._commands[str(self.cwd)] = [str(c) for c in found]
                     self._translate(msg, events)
                 proc.wait(timeout=30)
                 drainer.join(timeout=5)
@@ -593,6 +653,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, html, "text/html; charset=utf-8")
         elif self.path == "/api/accounts":
             self._json(self.backend.accounts())
+        elif self.path == "/api/commands":
+            self._json(self.backend.commands())
         elif self.path.split("?")[0] == "/api/sessions":
             q = parse_qs(urlparse(self.path).query)
             scope = "all" if q.get("scope", ["dir"])[0] == "all" else "dir"

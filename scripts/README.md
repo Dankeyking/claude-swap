@@ -41,6 +41,17 @@ Werkzeuge sind standardmäßig abgeschaltet, weil im Headless-Betrieb niemand
 Berechtigungsdialoge beantworten kann. Die Einstellung „Lesend" gibt `Read`,
 `Glob`, `Grep` und Websuche frei.
 
+**Verlauf** rechts, gelesen aus Claude Codes eigenen Transkripten: wahlweise nur
+das aktuelle Verzeichnis oder alle, mit Suche (`Strg+K`) und Datumsgruppen. Ein
+Gespräch aus einem anderen Verzeichnis zu öffnen wechselt dorthin — `--resume`
+löst die Sitzungs-ID relativ zum Arbeitsverzeichnis auf. Lange Gespräche laden
+die letzten 80 Beiträge, der Rest auf Knopfdruck.
+
+**Slash-Befehle** funktionieren auch im Print-Modus (`/context` liefert einen
+echten Bericht). Ein `/` in der Eingabe öffnet die Palette; die Liste stammt aus
+dem `slash_commands`-Feld des Init-Events der CLI und ist ab der ersten
+Nachricht im jeweiligen Verzeichnis exakt.
+
 ## `desktop_profiles.py` — ein Profil je Konto für die Desktop-App
 
 Jedes mit `--user-data-dir` gestartete Electron-Profil hat einen eigenen
