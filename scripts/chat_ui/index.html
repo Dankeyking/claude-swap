@@ -70,6 +70,35 @@
     padding: 0 4px; white-space: nowrap;
   }
 
+  /* ---------- layout with history rail ---------- */
+  .shell { flex: 1; display: flex; min-height: 0; }
+  .stage { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+  .rail {
+    width: 268px; flex: none; border-left: 1px solid var(--line-soft);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  body.no-rail .rail { display: none; }
+  .rail h2 {
+    font-size: 11.5px; font-weight: 500; color: var(--faint);
+    margin: 0; padding: 14px 16px 8px; letter-spacing: .02em;
+  }
+  .rail .list { flex: 1; overflow-y: auto; padding: 0 8px 14px; }
+  .conv {
+    display: block; width: 100%; text-align: left; background: transparent;
+    border: 0; border-radius: 9px; padding: 8px 10px; cursor: pointer;
+    margin-bottom: 2px;
+  }
+  .conv:hover { background: var(--pill); }
+  .conv[aria-current="true"] { background: var(--pill); }
+  .conv .t {
+    font-size: 13px; line-height: 1.35; overflow: hidden;
+    text-overflow: ellipsis; display: -webkit-box;
+    -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  .conv .d { font-size: 11.5px; color: var(--faint); margin-top: 2px; }
+  .rail .none { font-size: 12.5px; color: var(--faint); padding: 4px 10px; }
+
   /* ---------- chat ---------- */
   main { flex: 1; overflow-y: auto; }
   .col { max-width: 760px; margin: 0 auto; padding: 30px 24px 8px; }
@@ -248,8 +277,16 @@
   <div class="spacer"></div>
   <span class="total" id="total" title="Kosten dieser Sitzung"></span>
   <div id="accounts" style="display:flex;gap:6px"></div>
+  <button class="chip" id="railToggle" title="Verlauf ein- oder ausblenden" aria-label="Verlauf">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+         width="15" height="15" aria-hidden="true">
+      <path d="M4 6h16M4 12h16M4 18h10"/>
+    </svg>
+  </button>
 </header>
 
+<div class="shell">
+<div class="stage">
 <main>
   <div class="col" id="log" aria-live="polite" aria-busy="false">
     <div class="empty" id="empty">Womit fangen wir an?</div>
@@ -330,6 +367,13 @@
     </div>
   </form>
 </footer>
+</div>
+
+<aside class="rail">
+  <h2>Verlauf</h2>
+  <div class="list" id="convs"></div>
+</aside>
+</div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -715,6 +759,7 @@ async function changeDir(path) {
     // resumed from another one. Start fresh rather than fail mid-turn.
     sessionId = null;
     addTurn("note", "Verzeichnis: " + d.cwd + " — neues Gespräch");
+    loadConversations();   // history is per directory
   } catch (e) { hint.textContent = String(e); hint.classList.add("bad"); }
 }
 
@@ -830,6 +875,10 @@ $("form").onsubmit = async (ev) => {
     }
     inflight = null;
     setBusy(false); loadAccounts(); scrollDown();
+    // Once now for the new entry, once shortly after: Claude Code writes the
+    // generated title a moment after the turn ends.
+    loadConversations();
+    setTimeout(loadConversations, 2500);
   }
 };
 
@@ -845,13 +894,90 @@ $("newChat").onclick = () => {
   if (busy) return;
   sessionId = null;
   log.innerHTML = '<div class="empty" id="empty">Womit fangen wir an?</div>';
+  markActiveConv();
   $("input").focus();
 };
+
+/* ---------- conversation history ----------
+   The list comes from Claude Code's own transcripts, so it survives restarts
+   and also shows conversations started in a terminal. Opening one re-displays
+   it and adopts its id, which means the next message continues it through
+   `--resume` rather than replaying anything. */
+
+const rtf = new Intl.RelativeTimeFormat("de-DE", { numeric: "auto" });
+function whenLabel(epochSeconds) {
+  const diff = (epochSeconds * 1000 - Date.now()) / 1000;
+  const steps = [[60, "second"], [3600, "minute"], [86400, "hour"], [604800, "day"]];
+  const divs = [1, 60, 3600, 86400];
+  for (let i = 0; i < steps.length; i++) {
+    if (Math.abs(diff) < steps[i][0]) return rtf.format(Math.round(diff / divs[i]), steps[i][1]);
+  }
+  return new Date(epochSeconds * 1000).toLocaleDateString("de-DE",
+    { day: "2-digit", month: "2-digit", year: "2-digit" });
+}
+
+function markActiveConv() {
+  for (const el of document.querySelectorAll(".conv")) {
+    el.setAttribute("aria-current", String(el.dataset.id === sessionId));
+  }
+}
+
+async function loadConversations() {
+  const host = $("convs");
+  let data;
+  try { data = await (await fetch("/api/sessions")).json(); }
+  catch { return; }
+  const rows = data.sessions || [];
+  if (!rows.length) {
+    host.innerHTML = '<div class="none">Noch keine Gespräche in diesem Verzeichnis.</div>';
+    return;
+  }
+  host.innerHTML = "";
+  for (const s of rows) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "conv"; b.dataset.id = s.id;
+    b.setAttribute("aria-current", String(s.id === sessionId));
+    b.innerHTML = `<div class="t">${esc(s.title)}</div>
+                   <div class="d">${esc(whenLabel(s.updatedAt))} · ${s.turns} ${s.turns === 1 ? "Frage" : "Fragen"}</div>`;
+    b.onclick = () => openConversation(s.id);
+    host.appendChild(b);
+  }
+}
+
+async function openConversation(id) {
+  if (busy || id === sessionId) return;
+  let data;
+  try { data = await (await fetch("/api/session?id=" + encodeURIComponent(id))).json(); }
+  catch (e) { addTurn("note bad", String(e)); return; }
+  if (data.error) { addTurn("note bad", data.error); return; }
+
+  log.innerHTML = "";
+  for (const m of data.messages) {
+    if (m.role === "user") addTurn("user", m.text);
+    else {
+      const b = addTurn("claude", m.text);
+      addCopyButtons(b);
+    }
+  }
+  if (!data.messages.length) addTurn("note", "Dieses Gespräch enthält keinen sichtbaren Verlauf.");
+  sessionId = id;
+  markActiveConv();
+  scrollDown(true);
+  $("input").focus();
+}
+
+$("railToggle").onclick = () => {
+  const hidden = document.body.classList.toggle("no-rail");
+  localStorage.setItem("ui.rail", hidden ? "off" : "on");
+  if (!hidden) loadConversations();
+};
+if (localStorage.getItem("ui.rail") === "off") document.body.classList.add("no-rail");
 
 /* ---------- boot ---------- */
 
 syncPills();
 loadAccounts();
+loadConversations();
 fetch("/api/context").then(r => r.json()).then(applyContext).catch(() => { });
 setInterval(() => { if (!busy) loadAccounts(); }, 30000);
 $("input").focus();

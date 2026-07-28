@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 import queue
+import re
 import shutil
 import signal
 import subprocess
@@ -159,6 +160,140 @@ class Backend:
             return {"error": f"Kein Verzeichnis: {target}"}
         self.cwd = target
         return {"cwd": str(target)}
+
+    # -- conversation history ---------------------------------------------
+    #
+    # Claude Code already persists every conversation as JSONL under
+    # ~/.claude/projects/<encoded cwd>/<session id>.jsonl, and `--resume` reads
+    # it back. Reading that instead of keeping a second store means history
+    # survives restarts for free, sessions started in a terminal show up here
+    # too, and resuming is the CLI's own mechanism rather than a replay.
+
+    @staticmethod
+    def _encode_cwd(path: Path) -> str:
+        """Claude Code's directory key: separators, colon and spaces become '-'."""
+        out = str(path)
+        for ch in (":", "\\", "/", " "):
+            out = out.replace(ch, "-")
+        return out
+
+    def _project_dir(self) -> Path | None:
+        """The transcript directory for the current cwd, or None if there is none.
+
+        The encoded name is derived, then verified; if it is absent, fall back
+        to reading each candidate's own recorded ``cwd`` so an encoding rule we
+        got wrong degrades to a slower lookup rather than an empty list.
+        """
+        root = Path.home() / ".claude" / "projects"
+        guess = root / self._encode_cwd(self.cwd)
+        if guess.is_dir():
+            return guess
+        if not root.is_dir():
+            return None
+        target = str(self.cwd).lower()
+        for candidate in root.iterdir():
+            if not candidate.is_dir():
+                continue
+            for f in candidate.glob("*.jsonl"):
+                try:
+                    with f.open("r", encoding="utf-8", errors="replace") as fh:
+                        for line in fh:
+                            entry = json.loads(line)
+                            recorded = entry.get("cwd")
+                            if isinstance(recorded, str):
+                                if recorded.lower() == target:
+                                    return candidate
+                                break
+                except (OSError, json.JSONDecodeError):
+                    pass
+                break
+        return None
+
+    @staticmethod
+    def _text_of(content) -> str:
+        """Flatten a message's content to plain text; tool blocks are dropped."""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(
+                b.get("text", "") for b in content
+                if isinstance(b, dict) and b.get("type") == "text"
+            )
+        return ""
+
+    def list_sessions(self, limit: int = 60) -> dict:
+        """Conversations for the current directory, newest first."""
+        folder = self._project_dir()
+        if folder is None:
+            return {"sessions": []}
+        rows = []
+        for f in folder.glob("*.jsonl"):
+            try:
+                stat = f.stat()
+            except OSError:
+                continue
+            title, first_user, turns = None, None, 0
+            try:
+                with f.open("r", encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        try:
+                            e = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        kind = e.get("type")
+                        if kind == "ai-title" and e.get("aiTitle"):
+                            title = str(e["aiTitle"])
+                        elif kind == "user" and not e.get("isSidechain"):
+                            turns += 1
+                            if first_user is None:
+                                first_user = self._text_of(e.get("message", {}).get("content"))
+            except OSError:
+                continue
+            if not turns:
+                continue  # a session file with no exchange is noise in the list
+            if not title:
+                # First line of the opening question, when Claude Code has not
+                # written its generated title yet.
+                lines = (first_user or "").strip().splitlines()
+                title = lines[0] if lines else ""
+            rows.append({
+                "id": f.stem,
+                "title": title.strip()[:90] or "Ohne Titel",
+                "turns": turns,
+                "updatedAt": stat.st_mtime,
+            })
+        rows.sort(key=lambda r: r["updatedAt"], reverse=True)
+        return {"sessions": rows[:limit]}
+
+    def read_session(self, session_id: str) -> dict:
+        """The visible exchange of one conversation, for re-display."""
+        if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", session_id):
+            return {"error": "ungueltige Sitzungs-ID"}
+        folder = self._project_dir()
+        if folder is None:
+            return {"error": "kein Verlauf fuer dieses Verzeichnis"}
+        path = folder / f"{session_id}.jsonl"
+        if not path.is_file():
+            return {"error": "Sitzung nicht gefunden"}
+        messages = []
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    try:
+                        e = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if e.get("isSidechain"):
+                        continue          # subagent traffic, not the conversation
+                    kind = e.get("type")
+                    if kind not in ("user", "assistant"):
+                        continue
+                    text = self._text_of(e.get("message", {}).get("content"))
+                    if text.strip():
+                        messages.append({"role": kind, "text": text})
+        except OSError as e:
+            return {"error": str(e)}
+        return {"id": session_id, "messages": messages}
 
     def list_dirs(self) -> dict:
         """The current directory, its parent, and its immediate subdirectories."""
@@ -385,6 +520,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, html, "text/html; charset=utf-8")
         elif self.path == "/api/accounts":
             self._json(self.backend.accounts())
+        elif self.path == "/api/sessions":
+            self._json(self.backend.list_sessions())
+        elif self.path.startswith("/api/session?"):
+            from urllib.parse import parse_qs, urlparse
+            wanted = parse_qs(urlparse(self.path).query).get("id", [""])[0]
+            self._json(self.backend.read_session(wanted))
         elif self.path == "/api/context":
             # Options ship with the context so the UI never hardcodes a value
             # the server would reject.
