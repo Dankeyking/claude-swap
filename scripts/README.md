@@ -69,6 +69,30 @@ oben gescrollt hat, kommt über „Zum Ende" zurück und sieht dort, ob inzwisch
 etwas angekommen ist. Unter jeder fertigen Antwort stehen Modell, Dauer, Kosten
 und ein Knopf, der sie als Markdown kopiert.
 
+**Konten verwalten** über das Zahnrad in der Kopfzeile. Bisher hieß ein neues
+Konto: raus aus der Oberfläche, in ein Terminal, und wissen, welcher von zwei
+unverwandten Befehlen der richtige ist. Beide Wege liegen jetzt dort:
+
+*Aus der aktuellen Anmeldung* (`cswap add`) nimmt das Konto, mit dem Claude Code
+gerade angemeldet ist. Das Fenster fragt `cswap status --json` im Sekundentakt
+ab und unterscheidet dessen drei Fälle — keine Anmeldung, eine unverwaltete, eine
+bereits verwaltete. Man meldet sich also anderswo an, kommt zurück, und der Knopf
+ist schon frei; melden muss man das niemandem. Eine Slot-Nummer wird nie
+mitgegeben: bei belegtem Slot fragt cswap auf der Standardeingabe nach, und ein
+Aufruf ohne Terminal würde dort hängen.
+
+*Mit Setup-Token* (`cswap add-token`) braucht überhaupt keine Anmeldung auf
+diesem Rechner — der einzige Weg, ein zweites Konto auf eine Maschine zu bringen,
+vor der man nicht sitzt. Einmal `claude setup-token` ausführen, Ausgabe
+einsetzen. Der Token geht über die Standardeingabe an cswap, steht also in keiner
+Prozessliste, wird nicht protokolliert und nicht zurückgegeben.
+
+Dazu Kurzname setzen, aus der Rotation nehmen (`disable`, bleibt manuell
+wählbar) und entfernen — letzteres zweistufig und immer über die Slot-Nummer,
+weil eine doppelt vorkommende E-Mail cswap nachfragen lässt, welches Konto
+gemeint ist. Alles, was Zugangsdaten schreibt, wartet, solange eine Antwort
+läuft.
+
 > **Zum Modus:** `dontAsk` heißt nicht „ohne Rückfrage ausführen", sondern
 > *ablehnen* statt fragen — es ist die restriktive Wahl. Wer unbeaufsichtigt
 > Werkzeuge laufen lassen will, braucht „Alles freigeben"

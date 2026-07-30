@@ -474,3 +474,176 @@ def test_upload_rejects_an_oversized_declaration(live):
     status = conn.getresponse().status
     conn.close()
     assert status == 413, "die Grenze muss vor dem Lesen des Koerpers greifen"
+
+
+# -- routes must survive the query string the page appends ------------------
+#
+# The page adds `?cwd=…` to every /api call so two tabs cannot fight over one
+# working directory. Routes compared against the raw path stopped matching the
+# moment that happened -- one round trip after load -- and the chat itself
+# answered 404, which the page rendered as a turn that produced nothing. Every
+# route matches on the path with the query removed now, and these hold it there.
+
+@pytest.mark.parametrize("path", [
+    "/api/accounts",
+    "/api/status",
+    "/api/uploads",
+    "/api/context",
+    "/api/commands",
+    "/api/sessions",
+])
+def test_get_routes_ignore_the_cwd_query(live, path):
+    status, body = request(live, path + "?cwd=C%3A%5Cprojekt",
+                           headers={"X-Chat-Token": "test-token"})
+    assert status == 200, f"{path} darf am angehaengten cwd nicht scheitern"
+    assert "Unbekannte Route" not in body
+
+
+@pytest.mark.parametrize("path,body", [
+    ("/api/switch", {"account": "2"}),
+    ("/api/autoswitch", {}),
+    # /api/uploads/clear is deliberately absent: the `live` fixture does not
+    # redirect UPLOAD_DIR, so calling it would empty the real upload folder of
+    # whoever runs the suite. It got the same route fix as the rest.
+    ("/api/accounts/add", {}),
+    ("/api/accounts/remove", {"number": 2}),
+    ("/api/accounts/enabled", {"number": 2, "enabled": True}),
+    ("/api/accounts/alias", {"number": 2, "alias": "work"}),
+    ("/api/accounts/add-token", {"token": "sk-ant-oat01-x"}),
+])
+def test_post_routes_ignore_the_cwd_query(live, path, body):
+    status, text = request(live, path + "?cwd=C%3A%5Cprojekt",
+                           method="POST", body=body, headers=JSON_TOKEN)
+    assert status != 404, f"{path} wurde durch das angehaengte cwd unerreichbar"
+    assert "Unbekannte Route" not in text
+
+
+def test_chat_route_is_reachable_with_the_cwd_query(live):
+    """The route the page actually calls. It answered 404 before."""
+    status, text = request(live, "/api/chat?cwd=C%3A%5Cprojekt", method="POST",
+                           body={"message": ""}, headers=JSON_TOKEN)
+    # An empty message is refused with 400 -- which proves the route was reached.
+    assert status == 400, text
+    assert "Unbekannte Route" not in text
+
+
+# -- account management: what may reach argv --------------------------------
+#
+# Same rule as the chat options: these values come from the browser, so nothing
+# that could read as a flag or a shell fragment may be passed through.
+
+@pytest.mark.parametrize("bad", [
+    "--force", "-x", "; whoami", "a b", "ü" * 3, "", "   ", "x" * 33,
+    "/etc/passwd", "a\nb", ".leading",
+])
+def test_bad_aliases_are_refused(backend, bad):
+    assert backend._clean_alias(bad) is None
+
+
+@pytest.mark.parametrize("good", ["work", "privat-2", "a.b_c", "A1", "x" * 32])
+def test_plausible_aliases_are_accepted(backend, good):
+    assert backend._clean_alias(good) == good
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "1000", "abc", "", "2; rm -rf /", None, "1.5"])
+def test_bad_slot_numbers_are_refused(backend, bad):
+    assert backend._clean_slot(bad) is None
+
+
+@pytest.mark.parametrize("given,want", [(1, "1"), ("2", "2"), (" 7 ", "7"), (999, "999")])
+def test_plausible_slot_numbers_are_accepted(backend, given, want):
+    assert backend._clean_slot(given) == want
+
+
+def test_alias_reaches_argv_only_when_clean(backend, monkeypatch):
+    calls = []
+    monkeypatch.setattr(backend, "_run",
+                        lambda args, **kw: calls.append(args) or (0, "ok", ""))
+    backend.add_current_account("--force")
+    assert calls[0] == [backend.cswap, "add"], "ein Flag darf nicht durchgereicht werden"
+    calls.clear()
+    backend.add_current_account("work")
+    assert calls[0] == [backend.cswap, "add", "--alias", "work"]
+
+
+def test_remove_always_goes_by_slot_number(backend, monkeypatch):
+    """An email matching two accounts makes cswap ask which one, on stdin.
+    Answering that blind could delete the wrong account."""
+    seen = {}
+
+    def fake_run(args, **kw):
+        seen["args"] = args
+        seen["stdin"] = kw.get("stdin")
+        return 0, "Removed Account-2", ""
+
+    monkeypatch.setattr(backend, "_run", fake_run)
+    assert backend.remove_account("zwei@example.com")["ok"] is False
+    assert "args" not in seen, "eine E-Mail darf cswap remove nie erreichen"
+    backend.remove_account(2)
+    assert seen["args"] == [backend.cswap, "remove", "2"]
+    assert seen["stdin"] == "y\n", "die Rueckfrage muss beantwortet werden"
+
+
+def test_a_refused_removal_is_not_reported_as_done(backend, monkeypatch):
+    """cswap prints "Cancelled" and still exits 0."""
+    monkeypatch.setattr(backend, "_run", lambda args, **kw: (0, "Cancelled", ""))
+    assert backend.remove_account(2)["ok"] is False
+
+
+# -- the token never touches argv -------------------------------------------
+
+def test_token_goes_over_stdin_not_argv(backend, monkeypatch):
+    seen = {}
+
+    def fake_run(args, **kw):
+        seen["args"] = args
+        seen["stdin"] = kw.get("stdin")
+        return 0, "Added Account-3", ""
+
+    monkeypatch.setattr(backend, "_run", fake_run)
+    backend.add_token_account("sk-ant-oat01-GEHEIM", email="me@example.com")
+    assert seen["args"] == [backend.cswap, "add-token", "-", "--email", "me@example.com"]
+    assert not any("GEHEIM" in a for a in seen["args"]), \
+        "der Token darf in keiner Prozessliste stehen"
+    assert seen["stdin"] == "sk-ant-oat01-GEHEIM\n"
+
+
+def test_token_is_scrubbed_from_whatever_is_reported_back(backend, monkeypatch):
+    monkeypatch.setattr(backend, "_run",
+                        lambda args, **kw: (1, "", "failed for sk-ant-oat01-GEHEIM"))
+    result = backend.add_token_account("sk-ant-oat01-GEHEIM")
+    assert "GEHEIM" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "a\nb", "x" * 5000, None, 42])
+def test_implausible_tokens_are_refused(backend, monkeypatch, bad):
+    ran = []
+    monkeypatch.setattr(backend, "_run", lambda args, **kw: ran.append(args) or (0, "", ""))
+    assert backend.add_token_account(bad)["ok"] is False
+    assert not ran, "cswap darf fuer einen unplausiblen Token nicht starten"
+
+
+@pytest.mark.parametrize("bad", ["keine-mail", "a@b", "--flag@x.de", "a b@c.de"])
+def test_bad_emails_are_refused_before_cswap_runs(backend, monkeypatch, bad):
+    ran = []
+    monkeypatch.setattr(backend, "_run", lambda args, **kw: ran.append(args) or (0, "", ""))
+    assert backend.add_token_account("sk-ant-oat01-x", email=bad)["ok"] is False
+    assert not ran
+
+
+def test_alias_unset_when_the_name_is_cleared(backend, monkeypatch):
+    calls = []
+    monkeypatch.setattr(backend, "_run",
+                        lambda args, **kw: calls.append(args) or (0, "", ""))
+    backend.set_alias(2, "  ")
+    assert calls[0] == [backend.cswap, "alias", "2", "--unset"]
+
+
+def test_enable_and_disable_pick_the_right_verb(backend, monkeypatch):
+    calls = []
+    monkeypatch.setattr(backend, "_run",
+                        lambda args, **kw: calls.append(args) or (0, "", ""))
+    backend.set_account_enabled(3, True)
+    backend.set_account_enabled(3, False)
+    assert calls[0] == [backend.cswap, "enable", "3"]
+    assert calls[1] == [backend.cswap, "disable", "3"]

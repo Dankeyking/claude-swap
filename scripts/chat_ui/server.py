@@ -585,16 +585,28 @@ class Backend:
             "subdirs": subdirs[:200],
         }
 
-    def _run(self, args: list[str], timeout: int = 60) -> tuple[int, str, str]:
+    def _run(
+        self, args: list[str], timeout: int = 60, stdin: str | None = None
+    ) -> tuple[int, str, str]:
         """Run a command, decoding output as UTF-8 explicitly.
 
         Never `text=True`: on a German Windows the child's output is decoded
         with the ANSI code page, which raises on bytes these CLIs legitimately
         emit and leaves stdout as None.
+
+        ``stdin`` feeds the child one string. Two callers need it, for opposite
+        reasons: a setup-token must reach `cswap add-token -` *without* passing
+        through argv, where every process listing on the machine could read it;
+        and `cswap remove` asks "[y/N]" on stdin, which a headless caller has to
+        answer or the run hangs until the timeout.
         """
         try:
             proc = subprocess.run(
-                args, capture_output=True, timeout=timeout, cwd=str(self.cwd)
+                args,
+                capture_output=True,
+                timeout=timeout,
+                cwd=str(self.cwd),
+                input=None if stdin is None else stdin.encode("utf-8"),
             )
         except (OSError, subprocess.SubprocessError) as e:
             # A missing or wedged CLI used to raise straight through the handler
@@ -613,6 +625,192 @@ class Backend:
             return json.loads(out)
         except json.JSONDecodeError:
             return {"error": (err or out or f"cswap list failed (rc={rc})").strip()}
+
+    # -- account management -----------------------------------------------
+    #
+    # Adding an account meant leaving this interface for a terminal and
+    # remembering which of two unrelated commands applies. Both are driven from
+    # here now, and `cswap status --json` is what makes the first one one click:
+    # it distinguishes "no login at all" from "there is a login and cswap does
+    # not manage it" from "already managed", so the settings panel can notice a
+    # fresh login by itself rather than asking the user to report one.
+    #
+    # Every value below reaches a child process's argv, so the same rule as the
+    # chat options applies: validated against a pattern here, never passed
+    # through. The token is the exception that proves it -- it goes over stdin
+    # precisely so it never appears in an argument list.
+
+    # Both must start alphanumeric. Not cosmetics: a value beginning with "-"
+    # lands in argv next to a flag and argparse reads it as one.
+    ALIAS_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,31}")
+    EMAIL_RE = re.compile(
+        r"[A-Za-z0-9][^@\s,;:'\"\\]{0,63}@[A-Za-z0-9][A-Za-z0-9.-]{0,190}\.[A-Za-z]{2,24}"
+    )
+    MAX_TOKEN = 4096
+
+    def status(self) -> dict:
+        """`cswap status --json`: who is logged in, and whether cswap knows them.
+
+        Three shapes, and the panel needs all three: ``active`` is None with no
+        login at all, carries ``managed: false`` for a login cswap does not have,
+        and the full account row when it does.
+        """
+        rc, out, err = self._run([self.cswap, "status", "--json"])
+        try:
+            return json.loads(out)
+        except json.JSONDecodeError:
+            return {"error": (err or out or f"cswap status failed (rc={rc})").strip()}
+
+    @classmethod
+    def _clean_alias(cls, raw) -> str | None:
+        """A usable alias, or None. Never a value that could read as a flag."""
+        if not isinstance(raw, str):
+            return None
+        alias = raw.strip()
+        return alias if cls.ALIAS_RE.fullmatch(alias) else None
+
+    @classmethod
+    def _clean_slot(cls, raw) -> str | None:
+        """A slot number as a string, or None. Digits only, so never a flag."""
+        try:
+            n = int(str(raw).strip())
+        except (TypeError, ValueError):
+            return None
+        return str(n) if 1 <= n <= 999 else None
+
+    @staticmethod
+    def _outcome(rc: int, out: str, err: str, what: str) -> dict:
+        """One result shape for every management command.
+
+        cswap prints prose here, not JSON -- `--json` covers list, status and
+        switch only -- so report the last meaningful line rather than inventing
+        structure the command never emitted.
+        """
+        text = (err.strip() or out.strip())
+        line = next((ln.strip() for ln in reversed(text.splitlines()) if ln.strip()), "")
+        if rc == 0:
+            return {"ok": True, "message": line or f"{what} erledigt"}
+        return {"ok": False, "error": line or f"{what} fehlgeschlagen (rc={rc})"}
+
+    def add_current_account(self, alias=None) -> dict:
+        """`cswap add`: take the login Claude Code is currently using.
+
+        No slot is ever passed. With one, an occupied slot asks "Overwrite?" on
+        stdin and a headless run would hang there; without one cswap assigns the
+        next free number, which is what the panel offers anyway. Re-running this
+        for an account that is already managed refreshes its stored credentials
+        in place, which is the documented way to repair an expired login.
+        """
+        args = [self.cswap, "add"]
+        clean = self._clean_alias(alias)
+        if clean:
+            args += ["--alias", clean]
+        rc, out, err = self._run(args, timeout=120)
+        return self._outcome(rc, out, err, "Hinzufügen")
+
+    def add_token_account(self, token, email=None, alias=None) -> dict:
+        """`cswap add-token -`: register a setup-token or API key.
+
+        The one route that needs no prior login on this machine, which makes it
+        the only way to add an account to a box you are not sitting at. The token
+        is written to the child's stdin and is never placed in argv, never
+        logged, and never echoed back -- the response is scrubbed of it even
+        though cswap has no reason to print it, because "has no reason to" is not
+        a guarantee.
+        """
+        if not isinstance(token, str):
+            return {"ok": False, "error": "kein Token angegeben"}
+        token = token.strip()
+        if not token:
+            return {"ok": False, "error": "kein Token angegeben"}
+        if len(token) > self.MAX_TOKEN:
+            return {"ok": False, "error": "Token unplausibel lang"}
+        if any(c in token for c in "\r\n\t"):
+            return {"ok": False, "error": "Token enthält Zeilenumbrüche"}
+
+        args = [self.cswap, "add-token", "-"]
+        if isinstance(email, str) and email.strip():
+            clean_email = email.strip()
+            if not self.EMAIL_RE.fullmatch(clean_email):
+                return {"ok": False, "error": f"Ungültige E-Mail: {clean_email}"}
+            args += ["--email", clean_email]
+
+        rc, out, err = self._run(args, timeout=120, stdin=token + "\n")
+        result = self._outcome(rc, out, err, "Token hinzufügen")
+        # Belt: no path may return the secret to the browser that sent it.
+        if isinstance(result.get("message"), str):
+            result["message"] = result["message"].replace(token, "…")
+        if isinstance(result.get("error"), str):
+            result["error"] = result["error"].replace(token, "…")
+
+        # `add-token` takes no --alias (the flag is rejected unless combined with
+        # `add`), so an alias is a second call against the slot just created.
+        clean_alias = self._clean_alias(alias)
+        if result.get("ok") and clean_alias:
+            slot = self._slot_of_newest_account()
+            if slot:
+                self.set_alias(slot, clean_alias)
+        return result
+
+    def _slot_of_newest_account(self) -> str | None:
+        """The highest slot number cswap knows, which `add-token` just filled.
+
+        Only used to hang an alias on a freshly created account. Returns None
+        rather than guessing when the list cannot be read.
+        """
+        data = self.accounts()
+        rows = data.get("accounts") if isinstance(data, dict) else None
+        if not isinstance(rows, list) or not rows:
+            return None
+        numbers = [r.get("number") for r in rows if isinstance(r.get("number"), int)]
+        return str(max(numbers)) if numbers else None
+
+    def set_alias(self, slot, alias) -> dict:
+        """`cswap alias N NAME`, or `--unset` when the name is cleared."""
+        num = self._clean_slot(slot)
+        if not num:
+            return {"ok": False, "error": "ungültige Kontonummer"}
+        raw = alias.strip() if isinstance(alias, str) else ""
+        if not raw:
+            rc, out, err = self._run([self.cswap, "alias", num, "--unset"])
+            return self._outcome(rc, out, err, "Alias entfernen")
+        clean = self._clean_alias(raw)
+        if not clean:
+            return {
+                "ok": False,
+                "error": "Alias: Buchstaben, Zahlen, Punkt, Bindestrich, "
+                         "Unterstrich; max. 32 Zeichen",
+            }
+        rc, out, err = self._run([self.cswap, "alias", num, clean])
+        return self._outcome(rc, out, err, "Alias setzen")
+
+    def set_account_enabled(self, slot, enabled: bool) -> dict:
+        """`cswap enable|disable N`: hold a slot out of auto-rotation, or return it."""
+        num = self._clean_slot(slot)
+        if not num:
+            return {"ok": False, "error": "ungültige Kontonummer"}
+        verb = "enable" if enabled else "disable"
+        rc, out, err = self._run([self.cswap, verb, num])
+        return self._outcome(rc, out, err, "Ändern")
+
+    def remove_account(self, slot) -> dict:
+        """`cswap remove N`, answering its confirmation prompt.
+
+        Always by slot number: an email that matches two accounts makes cswap ask
+        *which* one on stdin, and answering that blind could delete the wrong
+        account. A number is unambiguous. The "y" below answers only the final
+        "[y/N]"; the panel has already asked the user.
+        """
+        num = self._clean_slot(slot)
+        if not num:
+            return {"ok": False, "error": "ungültige Kontonummer"}
+        rc, out, err = self._run([self.cswap, "remove", num], timeout=120, stdin="y\n")
+        result = self._outcome(rc, out, err, "Entfernen")
+        # cswap prints "Cancelled" and exits 0 when the answer is not "y" -- a
+        # refusal must not be reported as a removal.
+        if result.get("ok") and "cancel" in (out + err).lower():
+            return {"ok": False, "error": "Entfernen wurde abgelehnt"}
+        return result
 
     def autoswitch_once(self) -> dict:
         """One `cswap auto` tick: switch if the active account is near its limit.
@@ -900,6 +1098,20 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- routes ----------------------------------------------------------
 
+    def _route(self) -> str:
+        """The path with any query string removed.
+
+        Every route below matches on this, never on ``self.path``. The page
+        appends ``?cwd=…`` to every /api call so two tabs cannot fight over one
+        working directory -- which means an exact comparison against ``self.path``
+        stops matching the moment the page learns its directory, one round trip
+        after load. Half the routes were written that way and had become
+        unreachable: the chat itself answered 404, and the page rendered that as a
+        turn which produced nothing. Query values are still read from
+        ``self.path`` where a handler wants them.
+        """
+        return urlparse(self.path).path
+
     def do_GET(self) -> None:
         # Reads are cross-origin-unreadable anyway (no CORS header is ever
         # sent), but transcripts are in there -- so they carry the same gate as
@@ -907,7 +1119,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/") and not (self._origin_ok() and self._token_ok()):
             self._reject()
             return
-        if self.path in ("/", "/index.html"):
+        route = self._route()
+        if route in ("/", "/index.html"):
             try:
                 html = (HERE / "index.html").read_text(encoding="utf-8")
             except OSError as e:
@@ -916,23 +1129,27 @@ class Handler(BaseHTTPRequestHandler):
             # The page gets the token; nothing that did not load from here can.
             html = html.replace("__CHAT_TOKEN__", self.server.chat_token)
             self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
-        elif self.path == "/api/uploads":
+        elif route == "/api/uploads":
             self._json(self.backend.uploads_info())
-        elif self.path == "/api/accounts":
+        elif route == "/api/accounts":
             self._json(self.backend.accounts())
-        elif self.path.split("?")[0] == "/api/commands":
+        elif route == "/api/status":
+            # Who Claude Code is logged in as, and whether cswap manages them.
+            # The settings panel polls this to notice a fresh login by itself.
+            self._json(self.backend.status())
+        elif route == "/api/commands":
             q = parse_qs(urlparse(self.path).query)
             self._json(self.backend.commands(self.backend.resolve_cwd(q.get("cwd", [None])[0])))
-        elif self.path.split("?")[0] == "/api/files":
+        elif route == "/api/files":
             q = parse_qs(urlparse(self.path).query)
             self._json(self.backend.list_files(
                 q.get("q", [""])[0], cwd=self.backend.resolve_cwd(q.get("cwd", [None])[0])))
-        elif self.path.split("?")[0] == "/api/sessions":
+        elif route == "/api/sessions":
             q = parse_qs(urlparse(self.path).query)
             scope = "all" if q.get("scope", ["dir"])[0] == "all" else "dir"
             self._json(self.backend.list_sessions(
                 scope, cwd=self.backend.resolve_cwd(q.get("cwd", [None])[0])))
-        elif self.path.split("?")[0] == "/api/session":
+        elif route == "/api/session":
             q = parse_qs(urlparse(self.path).query)
             wanted = q.get("id", [""])[0]
             try:
@@ -941,7 +1158,7 @@ class Handler(BaseHTTPRequestHandler):
                 limit = 80
             self._json(self.backend.read_session(
                 wanted, limit, cwd=self.backend.resolve_cwd(q.get("cwd", [None])[0])))
-        elif self.path.split("?")[0] == "/api/context":
+        elif route == "/api/context":
             # Options ship with the context so the UI never hardcodes a value
             # the server would reject.
             q = parse_qs(urlparse(self.path).query)
@@ -956,17 +1173,18 @@ class Handler(BaseHTTPRequestHandler):
             self._not_found()
 
     def do_POST(self) -> None:
-        upload = self.path.split("?")[0] == "/api/upload"
+        route = self._route()
+        upload = route == "/api/upload"
         if not self._authentic("application/octet-stream" if upload else "application/json"):
             self._reject()
             return
-        if self.path == "/api/switch":
+        if route == "/api/switch":
             target = str(self._body().get("account", "")).strip()
             if not target:
                 self._json({"error": "kein Konto angegeben"}, 400)
                 return
             self._json(self.backend.switch(target))
-        elif self.path == "/api/cwd":
+        elif route == "/api/cwd":
             raw = str(self._body().get("cwd", "")).strip()
             if not raw:
                 self._json({"error": "kein Pfad angegeben"}, 400)
@@ -976,7 +1194,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(result, 400)
                 return
             self._json(self.backend.list_dirs())
-        elif self.path.split("?")[0] == "/api/upload":
+        elif route == "/api/upload":
             length = int(self.headers.get("Content-Length") or 0)
             if length <= 0:
                 self._json({"error": "leerer Upload"}, 400)
@@ -988,11 +1206,36 @@ class Handler(BaseHTTPRequestHandler):
             data = self.rfile.read(length)
             result = self.backend.save_upload(name, data)
             self._json(result, 400 if "error" in result else 200)
-        elif self.path == "/api/uploads/clear":
+        elif route == "/api/uploads/clear":
             self._json(self.backend.clear_uploads())
-        elif self.path == "/api/autoswitch":
+        elif route == "/api/autoswitch":
             self._json(self.backend.autoswitch_once())
-        elif self.path == "/api/chat":
+
+        # -- account management --------------------------------------------
+        #
+        # All five go through the same gate as every other write (own Origin,
+        # application/json, per-run token). They shell out to cswap, so the
+        # handlers do nothing but hand over the body -- validation belongs next
+        # to the argv it protects, in Backend.
+        elif route == "/api/accounts/add":
+            self._json(self.backend.add_current_account(self._body().get("alias")))
+        elif route == "/api/accounts/add-token":
+            body = self._body()
+            self._json(self.backend.add_token_account(
+                body.get("token"), body.get("email"), body.get("alias")))
+        elif route == "/api/accounts/alias":
+            body = self._body()
+            self._json(self.backend.set_alias(body.get("number"), body.get("alias")))
+        elif route == "/api/accounts/enabled":
+            body = self._body()
+            self._json(self.backend.set_account_enabled(
+                body.get("number"), bool(body.get("enabled"))))
+        elif route == "/api/accounts/remove":
+            # Deliberately not a DELETE on a guessable URL: the confirmation the
+            # panel collects is the point, and a body-carrying POST cannot be
+            # triggered by a stray link.
+            self._json(self.backend.remove_account(self._body().get("number")))
+        elif route == "/api/chat":
             self._stream_chat()
         else:
             self._not_found()

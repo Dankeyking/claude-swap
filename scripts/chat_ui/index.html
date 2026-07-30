@@ -72,6 +72,16 @@
   .mark { width: 17px; height: 17px; flex: none; color: var(--accent); }
   .spacer { flex: 1; }
 
+  /* The header is one row that never wraps, so anything added to it competes for
+     the same width -- the settings button was the addition that pushed the last
+     chip past the right edge and gave the whole page a horizontal scrollbar.
+     Nothing here may refuse to shrink: the directory chip and the account strip
+     give way first, the small round buttons never do. */
+  header > button.chip { flex: none; }
+  #dirChip { flex: 0 1 auto; min-width: 0; }
+  #accounts { flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  #accounts::-webkit-scrollbar { display: none; }
+
   .chip {
     display: inline-flex; align-items: center; gap: 7px;
     background: transparent; border: 1px solid transparent; border-radius: 999px;
@@ -495,6 +505,121 @@
   }
   .pathrow button:hover { background: var(--pill); }
 
+  /* ---------- settings sheet ----------
+     A real dialog rather than another popover: adding an account is a task with
+     fields and consequences, not a menu pick. <dialog> earns its keep here --
+     it traps focus, makes the page behind it inert and answers Escape, none of
+     which a div gets for free. */
+  .sheet {
+    width: min(620px, calc(100vw - 32px)); max-height: min(84vh, 760px);
+    padding: 0; border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--panel); color: var(--ink); box-shadow: var(--shadow);
+    display: none; flex-direction: column; overflow: hidden;
+  }
+  .sheet[open] { display: flex; }
+  .sheet::backdrop { background: rgba(0, 0, 0, .42); }
+  .sheethead {
+    display: flex; align-items: center; gap: 10px; margin: 0;
+    padding: 14px 16px; border-bottom: 1px solid var(--line-soft);
+  }
+  .sheethead h2 { font-size: 15px; font-weight: 600; margin: 0; flex: 1; }
+  .sheethead .x {
+    border: 0; background: transparent; color: var(--faint); cursor: pointer;
+    border-radius: 8px; width: 28px; height: 28px; font-size: 18px; line-height: 1;
+  }
+  .sheethead .x:hover { background: var(--pill); color: var(--ink); }
+  .sheetbody { overflow-y: auto; padding: 4px 16px 16px; }
+  .sheetbody h3 {
+    font-size: 11.5px; font-weight: 500; color: var(--faint);
+    letter-spacing: .02em; margin: 18px 0 8px;
+  }
+  .sheetnote {
+    padding: 10px 16px; border-top: 1px solid var(--line-soft);
+    font-size: 12.5px; color: var(--muted); min-height: 41px;
+  }
+  .sheetnote.bad { color: var(--danger); }
+  .sheetnote.good { color: var(--ok); }
+
+  /* one managed account */
+  .arow {
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+    margin-bottom: 8px; background: var(--bg);
+  }
+  .arow .who { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .arow .nm { font-size: 14px; font-weight: 500; }
+  .arow .em { font-size: 12.5px; color: var(--muted); }
+  .arow .tag {
+    font-size: 11px; border-radius: 999px; padding: 1px 8px;
+    background: var(--pill); color: var(--muted);
+  }
+  .arow .tag.live { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+  .arow .tag.off { color: var(--warn); }
+  .arow .num { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .arow .use {
+    font-size: 12px; color: var(--muted); margin-top: 3px;
+    font-variant-numeric: tabular-nums;
+  }
+  .arow .acts { display: flex; align-items: center; gap: 6px; margin-top: 9px; flex-wrap: wrap; }
+  .arow .acts input {
+    font: inherit; font-size: 12.5px; padding: 5px 8px; width: 130px;
+    border: 1px solid var(--line); border-radius: 7px;
+    background: var(--panel); color: inherit; outline: 0;
+  }
+  .arow .acts input:focus { border-color: var(--faint); }
+  .arow .grow { flex: 1; }
+
+  .btn {
+    border: 1px solid var(--line); background: var(--panel); color: inherit;
+    border-radius: 7px; padding: 5px 11px; font-size: 12.5px; cursor: pointer;
+    transition: background .16s, border-color .16s, color .16s;
+  }
+  .btn:hover:not(:disabled) { background: var(--pill); }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .btn.primary {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+  }
+  .btn.primary:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 88%, #000);
+  }
+  .btn.danger { color: var(--danger); }
+  .btn.danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+  }
+
+  /* one way of adding an account */
+  .route {
+    border: 1px solid var(--line); border-radius: 10px; padding: 12px;
+    margin-bottom: 10px;
+  }
+  .route .rhead { font-size: 13.5px; font-weight: 500; margin-bottom: 6px; }
+  .route .rhint { font-size: 12.5px; color: var(--muted); margin: 6px 0 0; line-height: 1.5; }
+  .route .rhint code {
+    font: 400 .92em/1.4 ui-monospace, "Cascadia Code", Consolas, monospace;
+    background: var(--pill); border-radius: 5px; padding: 1px 5px;
+  }
+  .route .rstate {
+    display: flex; align-items: center; gap: 8px; font-size: 13px;
+    padding: 8px 10px; border-radius: 8px; background: var(--pill);
+    margin-bottom: 9px;
+  }
+  .route .rstate.ready {
+    background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok);
+  }
+  .route .rstate .dot { width: 7px; height: 7px; }
+  .route .rrow { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .route .rrow input {
+    flex: 1; min-width: 130px; font: inherit; font-size: 13px; padding: 7px 9px;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--panel); color: inherit; outline: 0;
+  }
+  .route .rrow input:focus { border-color: var(--faint); }
+  .route .cmd-copy {
+    display: flex; align-items: center; gap: 6px; margin-top: 8px;
+    background: var(--pill); border-radius: 8px; padding: 6px 6px 6px 10px;
+    font: 400 12.5px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  .route .cmd-copy span { flex: 1; overflow-x: auto; white-space: nowrap; }
+
   /* ---------- narrow viewports ----------
      There were no breakpoints at all. The rail is a fixed 268px, so on a phone
      it squeezed the conversation into a column of broken words. Below 900px it
@@ -519,6 +644,9 @@
     header { padding: 8px 12px; gap: 6px; }
     .total { display: none; }          /* the account pills carry the numbers */
     .chip { max-width: 42vw; }
+    /* Icon only. Its colour and aria-pressed already say on or off, and the
+       word costs the account pills the width they need for their numbers. */
+    #autoLabel { display: none; }
     .col { padding: 20px 14px 8px; }
     footer { padding: 0 14px 16px; }
     .turn.user .bubble { max-width: 100%; }
@@ -554,6 +682,15 @@
     <span id="autoLabel">Auto</span>
   </button>
   <div id="accounts" style="display:flex;gap:6px"></div>
+  <button class="chip" id="settingsBtn" title="Konten verwalten"
+          aria-label="Konten verwalten" aria-haspopup="dialog">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+         stroke-linecap="round" stroke-linejoin="round" width="15" height="15"
+         aria-hidden="true">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 1 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.3-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 4.6a2 2 0 1 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 21 11a2 2 0 1 1 0 4z"/>
+    </svg>
+  </button>
   <button class="chip" id="railToggle" title="Verlauf ein- oder ausblenden"
           aria-label="Verlauf" aria-pressed="true">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
@@ -741,6 +878,70 @@
 </aside>
 </div>
 
+<!-- Adding an account used to mean leaving this interface for a terminal and
+     knowing which of two unrelated cswap commands applies. Both live here now.
+     The first route needs no typing at all: while this is open the panel watches
+     `cswap status`, so logging in elsewhere makes the button light up by itself. -->
+<dialog class="sheet" id="settings" aria-labelledby="settingsTitle">
+  <!-- Not a <form method="dialog">: that closes the dialog through the UA, which
+       skips the cleanup this panel owes (stop polling, drop the token field). -->
+  <div class="sheethead">
+    <h2 id="settingsTitle">Konten</h2>
+    <button type="button" class="x" id="settingsClose" aria-label="Schließen">×</button>
+  </div>
+
+  <div class="sheetbody">
+    <h3>Verwaltete Konten</h3>
+    <div id="acctList"></div>
+
+    <h3>Konto hinzufügen</h3>
+
+    <div class="route">
+      <div class="rhead">Aus der aktuellen Anmeldung</div>
+      <div class="rstate" id="loginState">
+        <span class="dot"></span><span id="loginText">wird geprüft …</span>
+      </div>
+      <div class="rrow">
+        <input id="addAlias" maxlength="32" spellcheck="false"
+               placeholder="Kurzname, etwa work (optional)"
+               aria-label="Kurzname für das neue Konto">
+        <button type="button" class="btn primary" id="addCurrent" disabled>Übernehmen</button>
+      </div>
+      <p class="rhint" id="loginHint"></p>
+    </div>
+
+    <div class="route">
+      <div class="rhead">Mit Setup-Token</div>
+      <p class="rhint">
+        Braucht keine Anmeldung auf diesem Rechner — gut für ein zweites Konto,
+        das hier nie eingeloggt war. Einmal ausführen und die Ausgabe einsetzen:
+      </p>
+      <div class="cmd-copy">
+        <span id="tokenCmd">claude setup-token</span>
+        <button type="button" class="btn" id="copyTokenCmd">Kopieren</button>
+      </div>
+      <div class="rrow">
+        <input id="tokenIn" type="password" autocomplete="off" spellcheck="false"
+               placeholder="sk-ant-oat01-… oder sk-ant-api…"
+               aria-label="Setup-Token oder API-Schlüssel">
+      </div>
+      <div class="rrow">
+        <input id="tokenEmail" type="email" autocomplete="off" spellcheck="false"
+               placeholder="E-Mail (optional)" aria-label="E-Mail des Kontos">
+        <input id="tokenAlias" maxlength="32" spellcheck="false"
+               placeholder="Kurzname (optional)" aria-label="Kurzname für das neue Konto">
+        <button type="button" class="btn primary" id="addToken" disabled>Hinzufügen</button>
+      </div>
+      <p class="rhint">
+        Der Token wird über die Standardeingabe an <code>cswap add-token</code>
+        übergeben, steht also in keiner Prozessliste.
+      </p>
+    </div>
+  </div>
+
+  <div class="sheetnote" id="settingsNote"></div>
+</dialog>
+
 <script>
 const $ = (id) => document.getElementById(id);
 
@@ -882,6 +1083,11 @@ document.addEventListener("click", (e) => {
    answer. */
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
+  // The sheet is the outermost layer while it is open: dismiss it and stop, so
+  // Escape can never reach past a modal and abort the turn behind it. Closing it
+  // here rather than leaving it to <dialog> is deliberate -- the UA's own Escape
+  // does not run the cleanup, and in some engines does not even fire `close`.
+  if ($("settings").open) { closeSettings(); return; }
   if (POPS.some(([, pop]) => $(pop).classList.contains("open"))) {
     closePops();
     return;
@@ -1351,6 +1557,330 @@ async function switchTo(target, email) {
   }
 }
 
+/* ---------- settings: managing the accounts ----------
+   Everything here drove cswap from a terminal before, which meant leaving this
+   interface and knowing which of two unrelated commands applies to your case.
+
+   The two routes are not alternatives of taste. `cswap add` takes the login
+   Claude Code is *currently* using, so it needs one to exist -- but then it is a
+   single click, and the panel watches for one appearing rather than asking you
+   to report it. `cswap add-token` needs no login on this machine at all, which
+   is the only way to add a second account to a box you are not sitting at. */
+
+let authState = null;      // last /api/status payload
+let authTimer = 0;
+
+const settings = $("settings");
+
+function note(text, kind) {
+  const el = $("settingsNote");
+  el.textContent = text || "";
+  el.className = "sheetnote" + (kind ? " " + kind : "");
+}
+
+/** Every mutating action shells out to cswap, which rewrites the credentials
+    Claude Code reads. Doing that under a running turn is asking for a confusing
+    failure mid-answer, so the panel waits instead. */
+function authBusyReason() {
+  return busy ? "Läuft gerade eine Antwort — bitte kurz warten." : "";
+}
+
+async function post(path, body) {
+  try {
+    return await (await api(path, {
+      method: "POST", body: JSON.stringify(body || {}),
+    })).json();
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+/* ---- the managed list ---- */
+
+/* The panel polls every few seconds, but it polls for the *login state*. The
+   rows must not be rebuilt along with it: a rebuild throws away a half-typed
+   alias and disarms a "Wirklich entfernen?" that was waiting for its second
+   click, both within a four-second window. So they are rebuilt only when the
+   accounts themselves differ. Usage percentages are deliberately not part of the
+   comparison -- they drift constantly and are not what these rows are for. */
+let rowsSig = "";
+
+function renderAccountRows(rows) {
+  const host = $("acctList");
+  const sig = JSON.stringify(rows.map(a =>
+    [a.number, a.email, a.alias || "", !!a.active, !!a.disabled, a.organizationName || ""]));
+  if (sig === rowsSig && host.childElementCount) return;
+  rowsSig = sig;
+
+  host.innerHTML = "";
+  if (!rows.length) {
+    host.innerHTML = '<div class="rhint">Noch keine Konten verwaltet. '
+                   + 'Unten hinzufügen.</div>';
+    return;
+  }
+  for (const a of rows) {
+    const num = a.number;
+    const row = document.createElement("div");
+    row.className = "arow";
+
+    const h5 = a.usage?.fiveHour, d7 = a.usage?.sevenDay;
+    const pct = (w) => typeof w?.pct === "number" ? Math.round(w.pct) + " %" : "–";
+
+    row.innerHTML = `
+      <div class="who">
+        <span class="nm">${esc(a.alias || a.email || ("Konto " + num))}</span>
+        ${a.alias ? `<span class="em">${esc(a.email || "")}</span>` : ""}
+        ${a.active ? '<span class="tag live">aktiv</span>' : ""}
+        ${a.disabled ? '<span class="tag off">nicht in Rotation</span>' : ""}
+        <span class="num">Konto ${num}</span>
+      </div>
+      <div class="use">5 Stunden ${pct(h5)} · 7 Tage ${pct(d7)}${
+        a.organizationName ? " · " + esc(a.organizationName) : ""}</div>`;
+
+    const acts = document.createElement("div");
+    acts.className = "acts";
+
+    // Alias: an input that saves only once it differs, so the button never
+    // pretends there is something to do.
+    const alias = document.createElement("input");
+    alias.value = a.alias || "";
+    alias.maxLength = 32;
+    alias.spellcheck = false;
+    alias.placeholder = "Kurzname";
+    alias.setAttribute("aria-label", `Kurzname für Konto ${num}`);
+    const saveAlias = document.createElement("button");
+    saveAlias.type = "button"; saveAlias.className = "btn";
+    saveAlias.textContent = "Speichern"; saveAlias.disabled = true;
+    alias.oninput = () => {
+      saveAlias.disabled = alias.value.trim() === (a.alias || "");
+    };
+    saveAlias.onclick = async () => {
+      const stop = authBusyReason();
+      if (stop) return note(stop, "bad");
+      saveAlias.disabled = true;
+      const r = await post("/api/accounts/alias",
+        { number: num, alias: alias.value.trim() });
+      note(r.ok ? (alias.value.trim() ? "Kurzname gesetzt." : "Kurzname entfernt.")
+                : r.error, r.ok ? "good" : "bad");
+      loadSettings();
+    };
+    acts.append(alias, saveAlias);
+
+    const spacer = document.createElement("div");
+    spacer.className = "grow";
+    acts.appendChild(spacer);
+
+    // Out of rotation, without deleting: the account stays switchable by hand
+    // and only `cswap auto` stops choosing it.
+    const rot = document.createElement("button");
+    rot.type = "button"; rot.className = "btn";
+    rot.textContent = a.disabled ? "In Rotation" : "Aus Rotation";
+    rot.title = a.disabled
+      ? "Wieder für den automatischen Wechsel zulassen"
+      : "Vom automatischen Wechsel ausnehmen — bleibt manuell wählbar";
+    rot.onclick = async () => {
+      const stop = authBusyReason();
+      if (stop) return note(stop, "bad");
+      rot.disabled = true;
+      const r = await post("/api/accounts/enabled",
+        { number: num, enabled: !!a.disabled });
+      note(r.ok ? r.message : r.error, r.ok ? "good" : "bad");
+      loadSettings();
+      acctSig = ""; loadAccounts();
+    };
+    acts.appendChild(rot);
+
+    // Two steps, and it says whose account it is the second time. This deletes
+    // stored credentials; a mis-click must not be enough.
+    const del = document.createElement("button");
+    del.type = "button"; del.className = "btn danger";
+    del.textContent = "Entfernen";
+    let armed = false, armTimer = 0;
+    del.onclick = async () => {
+      const stop = authBusyReason();
+      if (stop) return note(stop, "bad");
+      if (!armed) {
+        armed = true;
+        del.textContent = "Wirklich entfernen?";
+        note(`Konto ${num} (${a.email || "?"}) wird dauerhaft aus cswap `
+           + "entfernt. Nochmal klicken bestätigt.", "bad");
+        armTimer = setTimeout(() => {
+          armed = false; del.textContent = "Entfernen"; note("");
+        }, 6000);
+        return;
+      }
+      // Confirmed. Cancel the disarm first, or it fires a few seconds later and
+      // wipes the result this click is about to report.
+      clearTimeout(armTimer);
+      armed = false;
+      del.disabled = true;
+      const r = await post("/api/accounts/remove", { number: num });
+      note(r.ok ? `Konto ${num} entfernt.` : r.error, r.ok ? "good" : "bad");
+      loadSettings();
+      acctSig = ""; loadAccounts();
+    };
+    acts.appendChild(del);
+
+    row.appendChild(acts);
+    host.appendChild(row);
+  }
+}
+
+/* ---- route one: whatever is logged in right now ---- */
+
+function renderLoginRoute() {
+  const box = $("loginState"), text = $("loginText");
+  const btn = $("addCurrent"), hint = $("loginHint");
+  const active = authState?.active;
+  box.classList.remove("ready");
+  // Whatever the state says below, a greyed-out button has to explain itself --
+  // and "a turn is running" is the one reason that is nobody's mistake.
+  const wait = busy ? " Gerade läuft eine Antwort; Konten lassen sich erst "
+                    + "danach ändern." : "";
+
+  if (authState?.error) {
+    text.textContent = "Status nicht abrufbar";
+    hint.textContent = authState.error;
+    btn.disabled = true;
+    btn.textContent = "Übernehmen";
+    return;
+  }
+  if (!active) {
+    text.textContent = "Keine Anmeldung gefunden";
+    hint.textContent = "Melde dich in Claude Code mit dem Konto an, das du "
+      + "hinzufügen willst (/login im CLI). Dieses Fenster merkt es von selbst "
+      + "und schaltet den Knopf frei.";
+    btn.disabled = true;
+    btn.textContent = "Übernehmen";
+    return;
+  }
+  if (active.managed) {
+    text.textContent = `${active.email} — bereits als Konto ${active.number} verwaltet`;
+    hint.textContent = "Nichts zu tun. Erneutes Übernehmen frischt nur die "
+      + "gespeicherten Zugangsdaten dieses Kontos auf, etwa nach einer "
+      + "abgelaufenen Anmeldung." + wait;
+    btn.disabled = !!busy;
+    btn.textContent = "Zugangsdaten auffrischen";
+    return;
+  }
+  // The case this route exists for: a login cswap does not have yet.
+  box.classList.add("ready");
+  text.textContent = `Neue Anmeldung erkannt: ${active.email}`;
+  hint.textContent = "Ein Klick übernimmt sie als weiteres Konto. Die "
+    + "Kontonummer vergibt cswap selbst." + wait;
+  btn.disabled = !!busy;
+  btn.textContent = "Als Konto übernehmen";
+}
+
+$("addCurrent").onclick = async () => {
+  const stop = authBusyReason();
+  if (stop) return note(stop, "bad");
+  const btn = $("addCurrent");
+  btn.disabled = true;
+  note("cswap add läuft …");
+  const r = await post("/api/accounts/add", { alias: $("addAlias").value.trim() });
+  note(r.ok ? r.message : r.error, r.ok ? "good" : "bad");
+  if (r.ok) $("addAlias").value = "";
+  loadSettings();
+  acctSig = ""; loadAccounts();
+};
+
+/* ---- route two: a setup-token, no login needed ---- */
+
+$("tokenIn").addEventListener("input", () => {
+  $("addToken").disabled = $("tokenIn").value.trim() === "";
+});
+
+$("addToken").onclick = async () => {
+  const stop = authBusyReason();
+  if (stop) return note(stop, "bad");
+  const field = $("tokenIn");
+  const token = field.value.trim();
+  if (!token) return;
+  $("addToken").disabled = true;
+  note("cswap add-token läuft …");
+  const r = await post("/api/accounts/add-token", {
+    token,
+    email: $("tokenEmail").value.trim(),
+    alias: $("tokenAlias").value.trim(),
+  });
+  // Clear the field either way. A token that failed to register is still a
+  // secret, and leaving it in the DOM is the one thing this route must not do.
+  field.value = "";
+  $("addToken").disabled = true;
+  note(r.ok ? r.message : r.error, r.ok ? "good" : "bad");
+  if (r.ok) { $("tokenEmail").value = ""; $("tokenAlias").value = ""; }
+  loadSettings();
+  acctSig = ""; loadAccounts();
+};
+
+$("copyTokenCmd").onclick = async () => {
+  const btn = $("copyTokenCmd");
+  try {
+    await navigator.clipboard.writeText($("tokenCmd").textContent);
+    btn.textContent = "Kopiert";
+    setTimeout(() => { btn.textContent = "Kopieren"; }, 1600);
+  } catch { btn.textContent = "Fehlgeschlagen"; }
+};
+
+/* ---- opening and closing ---- */
+
+async function loadSettings() {
+  const [list, state] = await Promise.all([
+    api("/api/accounts").then(r => r.json()).catch(e => ({ error: String(e) })),
+    api("/api/status").then(r => r.json()).catch(e => ({ error: String(e) })),
+  ]);
+  authState = state;
+  renderAccountRows(Array.isArray(list?.accounts) ? list.accounts : []);
+  renderLoginRoute();
+}
+
+$("settingsBtn").onclick = () => {
+  closePops();
+  note("");
+  $("tokenIn").value = "";
+  $("addToken").disabled = true;
+  settings.showModal();
+  loadSettings();
+  // Polled while open, so a login made elsewhere lights up the button here
+  // without anyone having to press anything.
+  //
+  // The interval checks the dialog itself rather than trusting that something
+  // told it to stop. Measured: `close` does not fire in every engine this page
+  // runs in, so a poll wired only to that event would keep asking cswap for
+  // status every four seconds for as long as the tab stayed open.
+  clearInterval(authTimer);
+  authTimer = setInterval(() => {
+    if (!settings.open) { clearInterval(authTimer); authTimer = 0; return; }
+    loadSettings();
+  }, 4000);
+};
+
+/** The one way out. Every route that closes this panel goes through here: the
+    button, the backdrop, Escape. Anything that closed the dialog behind our back
+    would leave the token sitting in the DOM. */
+function closeSettings() {
+  clearInterval(authTimer);
+  authTimer = 0;
+  $("tokenIn").value = "";
+  $("addToken").disabled = true;
+  note("");
+  if (settings.open) settings.close();
+}
+
+$("settingsClose").onclick = closeSettings;
+settings.addEventListener("close", closeSettings);   // belt, where it does fire
+
+// Clicking the backdrop closes it, which <dialog> does not do on its own. The
+// click lands on the dialog element itself only when it missed the contents.
+settings.addEventListener("click", (e) => {
+  if (e.target === settings) closeSettings();
+});
+
+// The document-wide click handler closes the popovers; inside the sheet that is
+// harmless, but its own clicks must not reach the composer's palette logic.
+settings.addEventListener("mousedown", (e) => e.stopPropagation());
+
 /* ---------- automatic switching ----------
    The original goal asked for this, and `cswap auto` has always been able to do
    it -- but only as a foreground loop in a terminal you had to remember to
@@ -1727,14 +2257,16 @@ async function loadUploads() {
                    + `${fmtBytes(d.bytes || 0)} — `;
   const btn = document.createElement("button");
   btn.type = "button"; btn.className = "linkbtn"; btn.textContent = "löschen";
-  let armed = false;
+  let armed = false, armTimer = 0;
   btn.onclick = async () => {
     if (!armed) {
       armed = true;
       btn.textContent = "wirklich alle löschen?";
-      setTimeout(() => { if (armed) { armed = false; btn.textContent = "löschen"; } }, 5000);
+      armTimer = setTimeout(() => { armed = false; btn.textContent = "löschen"; }, 5000);
       return;
     }
+    clearTimeout(armTimer);   // it would otherwise re-label a button mid-delete
+    armed = false;
     btn.disabled = true;
     try { await api("/api/uploads/clear", { method: "POST", body: "{}" }); }
     catch (e) { addTurn("note bad", String(e)); }
@@ -1892,6 +2424,7 @@ let cmdAll = [];               // {name, description}, from the CLI
 let palRows = [];              // what is currently offered: {text, hint, apply}
 let palIndex = 0;
 let atTimer = 0;
+let palMode = null;            // "cmd" | "at" | null — which list is on screen
 
 async function loadCommands() {
   try {
@@ -1924,10 +2457,12 @@ function palClose() {
   clearTimeout(atTimer);
   $("cmdPop").classList.remove("open");
   palRows = [];
+  palMode = null;
 }
 
-function palShow(rows, title) {
+function palShow(rows, title, mode) {
   palRows = rows;
+  palMode = mode;
   if (!rows.length) { $("cmdPop").classList.remove("open"); return; }
   if (palIndex >= rows.length) palIndex = 0;
   $("cmdTitle").textContent = title;
@@ -1994,7 +2529,7 @@ async function loadFileRows(token) {
   palIndex = 0;
   palShow(rows, rows.length < d.total
     ? `Dateien — ${rows.length} von ${d.total}${d.capped ? "+" : ""}`
-    : "Dateien");
+    : "Dateien", "at");
 }
 
 /** Decide which palette the field is asking for, and fill it. */
@@ -2011,13 +2546,16 @@ function renderPalette() {
         // behaves the same way.
         apply: () => { $("input").value = "/" + c.name + " "; },
       })),
-      "Befehle");
+      "Befehle", "cmd");
     return;
   }
   const at = filePrefix();
   if (at !== null) {
-    // Debounced, and the previous list stays up until the new one lands rather
-    // than blinking shut between keystrokes.
+    // Within @ mode the previous file list stays up while the next one is
+    // fetched, so the popover does not blink shut between keystrokes. Coming
+    // *from* the command list it must go: offering /usage under a half-typed
+    // @path is worse than offering nothing for one round trip.
+    if (palMode !== "at") palClose();
     clearTimeout(atTimer);
     atTimer = setTimeout(() => loadFileRows(at), 120);
     return;
