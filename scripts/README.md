@@ -50,14 +50,24 @@ die letzten 80 Beiträge, der Rest auf Knopfdruck.
 **Slash-Befehle** funktionieren auch im Print-Modus (`/context` liefert einen
 echten Bericht). Ein `/` in der Eingabe öffnet die Palette; die Liste stammt aus
 dem `slash_commands`-Feld des Init-Events der CLI und ist ab der ersten
-Nachricht im jeweiligen Verzeichnis exakt.
+Nachricht im jeweiligen Verzeichnis exakt. Ein `@` an beliebiger Stelle öffnet
+dieselbe Palette mit Dateien aus dem Arbeitsverzeichnis — Pfeiltasten,
+Tabulator und Eingabetaste wie gewohnt.
 
 **Dateien und Bilder** über „+" oder per Ziehen-und-Ablegen ins Fenster. Sie
 werden nach `~/.claude-swap-backup/chat-uploads/` gelegt — bewusst außerhalb des
 Projekts — und als absoluter `@pfad` eingefügt. Das genügt: `@pfad` wird von der
 CLI selbst in den Prompt expandiert, gemessen auch bei abgeschalteten
-Werkzeugen und einschließlich Bildern. Hochgeladenes bleibt liegen und darf
-jederzeit gelöscht werden.
+Werkzeugen und einschließlich Bildern. Was die Ablage belegt, steht im
+„+"-Menü, samt Knopf zum Leeren.
+
+**Während einer Antwort** zeigt die Leiste unter der Eingabe, woran der Turn
+gerade ist — Nachdenken, welches Werkzeug läuft, wie viele Sekunden vergangen
+sind. Nur ein blinkender Cursor liest sich bei hohem Aufwand wie ein Absturz.
+`Esc` bricht ab (und schließt vorher, falls offen, Menü oder Verlauf); wer nach
+oben gescrollt hat, kommt über „Zum Ende" zurück und sieht dort, ob inzwischen
+etwas angekommen ist. Unter jeder fertigen Antwort stehen Modell, Dauer, Kosten
+und ein Knopf, der sie als Markdown kopiert.
 
 > **Zum Modus:** `dontAsk` heißt nicht „ohne Rückfrage ausführen", sondern
 > *ablehnen* statt fragen — es ist die restriktive Wahl. Wer unbeaufsichtigt

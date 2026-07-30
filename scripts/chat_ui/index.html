@@ -99,6 +99,12 @@
     font-size: 12.5px; color: var(--faint); font-variant-numeric: tabular-nums;
     padding: 0 4px; white-space: nowrap;
   }
+  /* An empty header where the accounts belong looks like "no accounts", not like
+     "cswap could not be asked". Say which it is. */
+  .acctfail {
+    font-size: 12.5px; color: var(--danger); padding: 0 6px;
+    max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   /* A percentage alone is a number; a bar is a signal you read without doing
      arithmetic. Both windows are shown, because the 7-day one is the wall you
      hit later and never see coming. */
@@ -289,7 +295,66 @@
     padding: 0 2px; font-size: 14px; line-height: 1;
   }
   .attch button:hover { color: var(--danger); }
-  .elapsed { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  /* A running turn used to say nothing but blink a caret, which reads as a
+     hang. This is the one place that reports what the turn is doing: the phase,
+     the tool that is running, and the seconds. It also holds the announcements
+     for screen readers, so the streamed answer itself no longer has to be a
+     live region -- that re-read the whole growing text on every chunk. */
+  .status {
+    display: flex; align-items: center; gap: 6px; min-width: 0;
+    font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums;
+    padding: 0 4px;
+  }
+  .status:empty { display: none; }
+  .sronly {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+  }
+  .status .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status .spin {
+    width: 10px; height: 10px; flex: none; border-radius: 50%;
+    border: 1.5px solid var(--line); border-top-color: var(--accent);
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    /* A frozen ring is a stuck ring. Pulse the opacity instead -- it still says
+       "alive" without any movement. */
+    .status .spin { animation: none; border-top-color: var(--accent); opacity: .75; }
+  }
+
+  /* Scrolling up during a long answer is normal -- rereading is the point. This
+     is the way back, and it says whether anything arrived meanwhile. */
+  .jump {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    bottom: calc(100% + 10px); z-index: 30;
+    display: none; align-items: center; gap: 6px;
+    background: var(--raised); border: 1px solid var(--line); color: var(--muted);
+    border-radius: 999px; padding: 5px 13px 5px 11px; font-size: 12.5px;
+    box-shadow: var(--shadow); cursor: pointer; white-space: nowrap;
+  }
+  .jump.show { display: flex; }
+  .jump:hover { color: var(--ink); }
+  .jump svg { width: 13px; height: 13px; }
+  .jump .new { color: var(--accent-ink); }
+
+  /* Below every finished answer, where the app puts them: copy the answer, and
+     what the turn cost. Previously the cost line existed and there was no way to
+     take the text with you except selecting it by hand. */
+  .foot {
+    display: flex; align-items: center; gap: 10px; margin-top: 6px;
+    font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums;
+  }
+  .foot .meta { margin-top: 0; }   /* it is a row now, not a line of its own */
+  .act {
+    display: inline-flex; align-items: center; gap: 5px; border: 0;
+    background: transparent; color: var(--faint); border-radius: 6px;
+    padding: 3px 6px; font-size: 11.5px; cursor: pointer;
+    transition: background .16s, color .16s;
+  }
+  .act:hover { background: var(--pill); color: var(--ink); }
+  .act.done { color: var(--ok); }
+  .act svg { width: 12px; height: 12px; }
 
   /* drop target */
   body.dropping .composer { border-color: var(--accent); border-style: dashed; }
@@ -380,6 +445,11 @@
   .sep { height: 1px; background: var(--line-soft); margin: 5px 6px; }
   .hintline { font-size: 12px; color: var(--muted); padding: 4px 10px 8px; line-height: 1.45; }
   .hintline.bad { color: var(--danger); }
+  .hintline .linkbtn {
+    border: 0; background: transparent; padding: 0; cursor: pointer;
+    color: var(--accent-ink); font: inherit; text-decoration: underline;
+    text-underline-offset: 2px;
+  }
 
   #cmdPop { left: 0; right: 0; min-width: 0; max-height: 46vh; }
   .cmd {
@@ -391,6 +461,9 @@
   .cmd .n {
     font-size: 13.5px; font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
     white-space: nowrap;
+    /* File paths go in here too, and a deep one is far longer than any command
+       name -- without this it pushed the description out of the popover. */
+    overflow: hidden; text-overflow: ellipsis; min-width: 0;
   }
   .cmd .h {
     font-size: 12px; color: var(--faint); flex: 1; overflow: hidden;
@@ -433,7 +506,15 @@
       width: min(310px, 86vw); background: var(--panel);
       border-left: 1px solid var(--line); box-shadow: var(--shadow);
     }
+    /* An overlay that covers the conversation needs a way out that is not the
+       one small button it came from. Tapping beside it closes it, as every
+       drawer does. */
+    body:not(.no-rail) .railback {
+      display: block; position: fixed; inset: 0; z-index: 45;
+      background: rgba(0, 0, 0, .32);
+    }
   }
+  .railback { display: none; }
   @media (max-width: 640px) {
     header { padding: 8px 12px; gap: 6px; }
     .total { display: none; }          /* the account pills carry the numbers */
@@ -443,6 +524,10 @@
     .turn.user .bubble { max-width: 100%; }
     .bar { gap: 2px; }
     .pill { padding: 5px 7px; }
+    /* Its own row above the pills. Left in the flow it reshuffled them every
+       time a turn started and again when it ended; this way appearing costs a
+       line and nothing moves sideways. */
+    .status { flex: 1 0 100%; order: -1; padding: 2px 5px 4px; }
     #cmdPop, #attachPop, .pop { max-width: calc(100vw - 28px); }
   }
 </style>
@@ -483,7 +568,11 @@
 <div class="shell">
 <div class="stage">
 <main>
-  <div class="col" id="log" aria-live="polite" aria-busy="false">
+  <!-- No aria-live here. A streamed answer grows by a few characters at a time,
+       and a live region re-announced the whole thing on every chunk, which made
+       the page unusable with a screen reader. The status line below the composer
+       is the polite region now, and it announces the phases instead. -->
+  <div class="col" id="log" aria-busy="false">
     <div class="empty" id="empty">
       <h1>Womit fangen wir an?</h1>
       <dl>
@@ -491,6 +580,7 @@
         <dt>@</dt><dd>Datei aus dem Arbeitsverzeichnis einbinden</dd>
         <dt>Strg+V</dt><dd>Screenshot aus der Zwischenablage anhängen</dd>
         <dt>Strg+K</dt><dd>im Verlauf suchen</dd>
+        <dt>Esc</dt><dd>laufende Antwort abbrechen</dd>
       </dl>
     </div>
   </div>
@@ -499,10 +589,18 @@
 <footer>
   <input type="file" id="filePick" multiple hidden>
   <form class="composer" id="form">
+    <button type="button" class="jump" id="jump" aria-label="Zum Ende springen">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 5v14M6 13l6 6 6-6"/>
+      </svg>
+      <span id="jumpLabel">Zum Ende</span>
+    </button>
     <div class="chips" id="chips"></div>
     <div class="input-row">
-      <textarea id="input" rows="1" placeholder="Nachricht an Claude …"></textarea>
-      <button class="send" id="send" type="submit" title="Senden" aria-label="Senden">
+      <textarea id="input" rows="1"
+                placeholder="Nachricht an Claude … (Enter senden, Shift+Enter neue Zeile)"></textarea>
+      <button class="send" id="send" type="submit" title="Senden" aria-label="Senden" disabled>
         <svg class="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M12 19V6M6 12l6-6 6 6"/>
@@ -525,6 +623,12 @@
       <button type="button" class="pill" id="toolsPill" aria-expanded="false" aria-haspopup="true">
         <span id="toolsLabel">Nur Chat</span>
       </button>
+      <div class="status" id="status"></div>
+      <!-- Separate from the visible line on purpose. The visible one reprints a
+           second counter every second, and as a live region that meant a screen
+           reader read it out every second. This one only ever receives the phase
+           the turn moved into. -->
+      <span class="sronly" id="announce" role="status" aria-live="polite"></span>
       <div class="spacer"></div>
       <button type="button" class="pill" id="modelPill" aria-expanded="false" aria-haspopup="true">
         <span id="modelLabel">Standard</span>
@@ -554,6 +658,10 @@
         <span class="key">/</span>
       </button>
       <div class="hintline">Bilder auch mit Strg+V oder per Ziehen ins Fenster.</div>
+      <!-- Uploads accumulate in ~/.claude-swap-backup/chat-uploads and the
+           server has always been able to report and clear them; nothing in the
+           interface said so, so the folder just grew unseen. -->
+      <div class="hintline" id="uploadsLine"></div>
       <div class="sep"></div>
       <div class="pathrow">
         <input id="fileSearch" type="search" spellcheck="false"
@@ -563,8 +671,9 @@
       <div class="hintline" id="fileHint"></div>
     </div>
 
-    <div class="pop" id="cmdPop" role="listbox" aria-label="Befehle">
-      <h3>Befehle</h3>
+    <!-- One popover for both type-aheads: "/" for commands, "@" for files. -->
+    <div class="pop" id="cmdPop" role="listbox" aria-label="Vorschläge">
+      <h3 id="cmdTitle">Befehle</h3>
       <div id="cmdItems"></div>
     </div>
 
@@ -610,6 +719,7 @@
 </footer>
 </div>
 
+<div class="railback" id="railBack" aria-hidden="true"></div>
 <aside class="rail">
   <div class="railtop" style="padding-top:12px">
     <button type="button" class="newbtn" id="newChat" title="Neues Gespräch (Alt+N)">
@@ -710,24 +820,78 @@ const POPS = [["modePill", "modePop"], ["toolsPill", "toolsPop"],
 function closePops(except) {
   for (const [pill, pop] of POPS) {
     if (pop === except) continue;
-    $(pop).classList.remove("open");
+    const el = $(pop);
+    // Closing a menu the keyboard was inside used to drop focus onto the body,
+    // which meant Tab started over from the top of the page. Hand it back to the
+    // button the menu belongs to.
+    if (el.classList.contains("open") && el.contains(document.activeElement)) {
+      $(pill).focus();
+    }
+    el.classList.remove("open");
     $(pill).setAttribute("aria-expanded", "false");
   }
 }
+
+/* Everything in a menu that the arrow keys should walk. The effort menu is a
+   slider rather than a list, so its range input counts as its one entry. */
+const popItems = (pop) => [...$(pop).querySelectorAll(".item, .slider input")];
+
 for (const [pill, pop] of POPS) {
   $(pill).addEventListener("click", (e) => {
     e.stopPropagation();
     const open = $(pop).classList.contains("open");
     closePops();
-    if (!open) { $(pop).classList.add("open"); $(pill).setAttribute("aria-expanded", "true"); }
+    if (open) return;
+    $(pop).classList.add("open");
+    $(pill).setAttribute("aria-expanded", "true");
+    // Land on the first entry, so the menu is operable without reaching for the
+    // mouse. The add menu focuses its own search field just below, so it is
+    // left to do that.
+    if (pop !== "attachPop") popItems(pop)[0]?.focus();
   });
   $(pop).addEventListener("click", (e) => e.stopPropagation());
+
+  /* Arrow keys walk the entries, Home and End jump to the ends. Until now the
+     only keyboard route through a menu was the digit shortcuts, with nothing
+     showing where you were. */
+  $(pop).addEventListener("keydown", (e) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+    // A range input owns its own arrow keys; there they step the value.
+    if (e.target.type === "range" && e.key.startsWith("Arrow")) return;
+    const items = popItems(pop);
+    if (!items.length) return;
+    e.preventDefault();
+    const at = items.indexOf(document.activeElement);
+    const last = items.length - 1;
+    const next = e.key === "Home" ? 0
+      : e.key === "End" ? last
+      : at < 0 ? (e.key === "ArrowDown" ? 0 : last)
+      : e.key === "ArrowDown" ? (at + 1) % items.length
+      : (at + last) % items.length;
+    items[next].focus();
+  });
 }
 document.addEventListener("click", (e) => {
   closePops();
-  if (!$("cmdPop").contains(e.target)) closeCmd();
+  if (!$("cmdPop").contains(e.target)) palClose();
 });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePops(); });
+/* Escape unwinds one layer at a time, innermost first: the open menu, then the
+   drawer covering the conversation, and only then the running turn. Stopping a
+   turn from the keyboard is what the CLI does and what this had no equivalent
+   for -- the stop button was the only way, and it is at the other end of a long
+   answer. */
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (POPS.some(([, pop]) => $(pop).classList.contains("open"))) {
+    closePops();
+    return;
+  }
+  if (railIsOverlay() && !document.body.classList.contains("no-rail")) {
+    closeRail();
+    return;
+  }
+  if (busy && inflight) inflight.abort();
+});
 
 /* Digits pick an entry while a menu is open, matching the hints the app shows
    next to its model and mode items. Skipped while typing in a field, so the
@@ -763,7 +927,9 @@ function renderMenu(host, options, current, onPick) {
                    <span class="sub">${esc(o.sub || "")}</span>
                    <span class="key">${i < 9 ? i + 1 : ""}</span>
                    <span class="tick">${o.v === current ? TICK : ""}</span>`;
-    b.onclick = () => { onPick(o.v); closePops(); };
+    // Close first: picking re-renders this list, and a focused button that gets
+    // replaced takes the keyboard with it before closePops can hand it back.
+    b.onclick = () => { closePops(); onPick(o.v); };
     host.appendChild(b);
   });
 }
@@ -815,7 +981,10 @@ $("effortRange").oninput = (e) => {
 /* ---------- messages ---------- */
 
 function addTurn(cls, text) {
-  $("empty")?.remove();
+  // A note is not the start of a conversation. Quota warnings arrive on their
+  // own schedule, and one landing on a fresh page used to wipe the shortcut
+  // hints before they had been read.
+  if (!cls.startsWith("note")) $("empty")?.remove();
   const t = document.createElement("div");
   t.className = "turn " + cls;
   const b = document.createElement("div");
@@ -946,7 +1115,24 @@ function atBottom() {
 }
 function scrollDown(force) {
   if (force || atBottom()) view().scrollTop = view().scrollHeight;
+  syncJump();
 }
+
+/* Scrolling up mid-answer is the normal thing to do, and until now the only way
+   back was to drag the scrollbar to the end -- a moving target while text is
+   still arriving. This is the way back, and it distinguishes "you are just not
+   at the bottom" from "something arrived while you were reading". */
+let unseen = false;
+function syncJump() {
+  const show = !atBottom();
+  if (!show) unseen = false;
+  $("jump").classList.toggle("show", show);
+  $("jumpLabel").textContent = unseen ? "Neue Antwort" : "Zum Ende";
+  $("jumpLabel").className = unseen ? "new" : "";
+}
+$("jump").onclick = () => { unseen = false; scrollDown(true); };
+view().addEventListener("scroll", syncJump, { passive: true });
+addEventListener("resize", syncJump);
 
 /* ---------- German number formats ---------- */
 
@@ -987,6 +1173,43 @@ function addCopyButtons(bubble) {
   }
 }
 
+/** The row under a finished answer: take the text with you, and what the turn
+    cost. Added both when a turn ends and when a stored conversation is
+    re-opened, so a reloaded answer offers what a fresh one does. Copying yields
+    the markdown Claude sent, not the rendered HTML — that is what pastes usefully
+    into an editor or another chat. */
+function addFoot(bubble, raw, metaText) {
+  const turn = bubble.parentElement;
+  if (!turn || turn.querySelector(".foot")) return;
+  const row = document.createElement("div");
+  row.className = "foot";
+
+  const copy = document.createElement("button");
+  copy.type = "button"; copy.className = "act";
+  copy.title = "Antwort als Markdown kopieren";
+  copy.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="9" y="9" width="11" height="11" rx="2"/>
+      <path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><span>Kopieren</span>`;
+  copy.onclick = async () => {
+    const label = copy.querySelector("span");
+    try {
+      await navigator.clipboard.writeText(raw);
+      label.textContent = "Kopiert"; copy.classList.add("done");
+      setTimeout(() => { label.textContent = "Kopieren"; copy.classList.remove("done"); }, 1600);
+    } catch { label.textContent = "Fehlgeschlagen"; }
+  };
+  row.appendChild(copy);
+
+  if (metaText) {
+    const m = document.createElement("span");
+    m.className = "meta";
+    m.textContent = metaText;
+    row.appendChild(m);
+  }
+  turn.appendChild(row);
+}
+
 /* ---------- accounts ---------- */
 
 function pctClass(p) { return p >= 90 ? "full" : p >= 75 ? "hot" : ""; }
@@ -1012,11 +1235,40 @@ function windowDetail(label, win) {
 
 let warnedAt = {};   // alias -> the threshold already announced
 
+/* The header is polled every 30 seconds. Rebuilding it unconditionally threw
+   away whatever the keyboard was on and flickered the bars for no reason, so the
+   rebuild now only happens when something actually differs. The busy flag is
+   part of the comparison because it decides whether the buttons are disabled. */
+let acctSig = "";
+
 async function loadAccounts() {
-  let data;
-  try { data = await (await api("/api/accounts")).json(); } catch { return; }
   const box = $("accounts");
-  if (data.error) { box.textContent = ""; return; }
+  let data;
+  try { data = await (await api("/api/accounts")).json(); }
+  catch {
+    // Losing the server is worth saying once; leaving the numbers frozen and
+    // silent is what made a dead `cswap` look like a working one.
+    if (acctSig !== "off") { acctSig = "off"; box.innerHTML =
+      '<span class="acctfail">Kontostand nicht abrufbar</span>'; }
+    return;
+  }
+  if (data.error) {
+    const sig = "err:" + data.error;
+    if (acctSig !== sig) {
+      acctSig = sig;
+      box.innerHTML = "";
+      const s = document.createElement("span");
+      s.className = "acctfail";
+      s.textContent = "cswap: " + String(data.error).split("\n")[0];
+      s.title = String(data.error);
+      box.appendChild(s);
+    }
+    return;
+  }
+
+  const sig = JSON.stringify([data.accounts, busy]);
+  if (sig === acctSig) return;
+  acctSig = sig;
   box.innerHTML = "";
   for (const a of data.accounts || []) {
     const name = a.alias || ("Konto " + a.number);
@@ -1025,8 +1277,14 @@ async function loadAccounts() {
     b.className = "acct";
     b.setAttribute("aria-current", a.active ? "true" : "false");
     b.disabled = a.active || busy;
-    b.title = [a.email, windowDetail("5 Stunden", h5), windowDetail("7 Tage", d7)]
-      .filter(Boolean).join("\n");
+    b.title = [
+      a.email,
+      windowDetail("5 Stunden", h5),
+      windowDetail("7 Tage", d7),
+      // A button that is greyed out for a reason should name the reason.
+      a.active ? "— aktives Konto"
+        : busy ? "— Wechsel erst nach dieser Antwort möglich" : "",
+    ].filter(Boolean).join("\n");
     const pct = typeof h5?.pct === "number" ? Math.round(h5.pct) : null;
     b.innerHTML = `
       <span class="top">
@@ -1056,9 +1314,27 @@ async function loadAccounts() {
   }
 }
 
+/* The CLI reports its own limit state once per turn, and it is fresher than the
+   polled numbers in the header -- but the server was forwarding the event and
+   the page was dropping it. Read defensively: the field names belong to the CLI,
+   so say nothing rather than guess at a shape that is not there. */
+let limitSaid = "";
+function noteLimit(info) {
+  acctSig = "";            // the polled numbers just became stale
+  loadAccounts();
+  const status = String(info?.status || info?.unified_status || "");
+  if (!status || /^allowed$/i.test(status) || limitSaid === status) return;
+  limitSaid = status;
+  addTurn("note bad", "Claude Code meldet: " + status.replace(/_/g, " "));
+}
+
 async function switchTo(target, email) {
   if (busy) return;
-  busy = true; loadAccounts();
+  // The switch shells out to cswap and takes a moment. Without a word about it
+  // the interface looked idle while refusing to send, which reads as broken.
+  busy = true; syncSend(); loadAccounts();
+  $("status").innerHTML = spinner("wechselt Konto …");
+  announce("Konto wird gewechselt");
   try {
     const res = await (await api("/api/switch", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -1067,7 +1343,12 @@ async function switchTo(target, email) {
     if (res.error) addTurn("note bad", "Wechsel fehlgeschlagen: " + res.error);
     else addTurn("note", `Konto: ${email || target} — ab der nächsten Nachricht`);
   } catch (e) { addTurn("note bad", String(e)); }
-  finally { busy = false; loadAccounts(); }
+  finally {
+    busy = false; syncSend();
+    endStatus("");
+    limitSaid = "";        // a different account has its own limit state
+    acctSig = ""; loadAccounts();
+  }
 }
 
 /* ---------- automatic switching ----------
@@ -1172,12 +1453,76 @@ $("dirInput").addEventListener("keydown", (e) => {
 
 let inflight = null;   // AbortController of the running turn
 
+/* ---------- the status line ----------
+   A blinking caret and nothing else reads as a hang, and at high effort the
+   first text can be minutes away. This says which phase the turn is in, which
+   tool is running, and how long it has been going. It is also the page's polite
+   live region, which is why the answer itself no longer is one: a growing
+   element announced its whole contents on every chunk. */
+
+let stPhase = "", stTool = "", stStart = 0, stTimer = 0, stClear = 0;
+
+/** Say something once, for screen readers only. Deliberately not the visible
+    line: that one reprints a second counter every second. */
+function announce(text) {
+  if ($("announce").textContent !== text) $("announce").textContent = text;
+}
+
+function spinner(text) {
+  return `<span class="spin"></span><span class="what">${esc(text)}</span>`;
+}
+
+function paintStatus() {
+  if (!stPhase) return;
+  const secs = Math.round((Date.now() - stStart) / 1000);
+  $("status").innerHTML = spinner(
+    (stTool ? `${stPhase} · ${stTool}` : stPhase) + (secs ? ` · ${secs} s` : ""));
+}
+
+function beginStatus() {
+  clearTimeout(stClear); clearInterval(stTimer);
+  stPhase = "denkt nach"; stTool = ""; stStart = Date.now();
+  stTimer = setInterval(paintStatus, 1000);
+  paintStatus();
+  announce("Claude denkt nach");
+}
+
+/** Move to another phase, keeping the elapsed count running. */
+function setPhase(phase, tool) {
+  if (!stPhase) return;
+  const changed = phase !== stPhase || (tool !== undefined && tool !== stTool);
+  stPhase = phase;
+  if (tool !== undefined) stTool = tool;
+  paintStatus();
+  if (changed) announce(stTool ? `${phase}: ${stTool}` : phase);
+}
+
+/** End the turn's status. ``final`` is shown briefly, then cleared -- the numbers
+    worth keeping live under the message, not in the toolbar. */
+function endStatus(final) {
+  clearInterval(stTimer); stTimer = 0;
+  stPhase = ""; stTool = "";
+  $("status").textContent = final || "";
+  announce(final || "");
+  if (final) stClear = setTimeout(() => { $("status").textContent = ""; }, 4000);
+}
+
+/** The send button offers nothing when there is nothing to send -- an empty
+    composer used to present a fully enabled button that quietly did nothing.
+    While a turn runs it is the stop button, so it stays live; while the page is
+    busy with something that cannot be stopped (an account switch) it does not. */
+function syncSend() {
+  const has = $("input").value.trim() !== "" || attached.length > 0;
+  $("send").disabled = busy ? inflight === null : !has;
+}
+
 function setBusy(on) {
   busy = on;
   $("send").classList.toggle("stop", on);
-  $("send").title = on ? "Abbrechen" : "Senden";
+  $("send").title = on ? "Abbrechen (Esc)" : "Senden";
   $("send").setAttribute("aria-label", on ? "Abbrechen" : "Senden");
   $("log").setAttribute("aria-busy", String(on));   // the .stop class swaps the icon
+  syncSend();
 }
 
 $("send").addEventListener("click", (e) => {
@@ -1221,18 +1566,14 @@ $("form").onsubmit = async (ev) => {
       const stick = atBottom();
       setMarkdown(bubble, acc);
       if (stick) scrollDown(true);
+      else { unseen = true; syncJump(); }   // text arrived while reading further up
     });
   };
 
-  // Twenty seconds of a blinking caret reads as a hang. A running count says
-  // the turn is alive without pretending to know how far along it is.
-  const started = Date.now();
-  const tick = setInterval(() => {
-    if (acc) { clearInterval(tick); $("hint").textContent = ""; return; }
-    $("hint").textContent = `wartet … ${Math.round((Date.now() - started) / 1000)} s`;
-  }, 1000);
+  beginStatus();
 
   inflight = new AbortController();
+  syncSend();   // from here the button is the stop button, so it must stay live
   try {
     const res = await api("/api/chat", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -1260,8 +1601,16 @@ $("form").onsubmit = async (ev) => {
         const name = n[1];
         if (name === "session") sessionId = p.sessionId;
         else if (name === "info") resolved = p;
-        else if (name === "text") { acc += p.text; paint(); }
-        else if (name === "tool") { addToolChip(bubble, p.name); scrollDown(); }
+        else if (name === "text") {
+          acc += p.text; paint();
+          setPhase("schreibt", "");   // the tool that ran is in the chips above
+        }
+        else if (name === "tool") {
+          addToolChip(bubble, p.name);
+          setPhase("arbeitet", p.name);
+          scrollDown();
+        }
+        else if (name === "limit") noteLimit(p);
         else if (name === "done") { meta = p; if (!acc && p.result) acc = p.result; paint(); }
         else if (name === "error") addTurn("note bad", p.message || "Unbekannter Fehler");
       }
@@ -1271,24 +1620,36 @@ $("form").onsubmit = async (ev) => {
     else addTurn("note bad", String(e));
   }
   finally {
-    clearInterval(tick);
-    if ($("hint").textContent.startsWith("wartet")) $("hint").textContent = "";
+    // Nothing in here may throw: everything that puts the interface back into a
+    // usable state runs from this block. A missing element here once left the
+    // send button stuck on "stop" and `busy` stuck true, so the page accepted no
+    // further message until it was reloaded.
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
     setMarkdown(bubble, acc);
     body.classList.remove("cursor");
-    addCopyButtons(bubble);
+
+    const secs = meta?.durationMs ? fmtSecs.format(meta.durationMs / 1000) + " s" : "";
+    const cost = typeof meta?.cost === "number" ? fmtCost.format(meta.cost) : "";
+    const metaLine = [resolved?.model || "", secs, cost].filter(Boolean).join(" · ");
 
     if (aborted) {
-      if (!acc) bubble.parentElement.remove();
       addTurn("note", "Abgebrochen");
+      endStatus("abgebrochen");
     } else if (meta) {
-      const m = document.createElement("div");
-      m.className = "meta";
-      const secs = meta.durationMs ? fmtSecs.format(meta.durationMs / 1000) + " s" : "";
-      const cost = typeof meta.cost === "number" ? fmtCost.format(meta.cost) : "";
-      m.textContent = [resolved?.model || "", secs, cost].filter(Boolean).join(" · ");
-      bubble.parentElement.appendChild(m);
       addCost(meta.cost);
+      endStatus("fertig" + (secs ? " · " + secs : ""));
+    } else {
+      endStatus("");
+    }
+
+    // A turn that produced no text is a gap in the conversation, not a turn --
+    // the note above already says whether it was stopped or failed. The cost is
+    // still booked, because it was still spent.
+    if (!acc) {
+      bubble.parentElement.remove();
+    } else {
+      addCopyButtons(bubble);
+      addFoot(bubble, acc, aborted ? "abgebrochen" : metaLine);
     }
     inflight = null;
     setBusy(false); loadAccounts(); scrollDown();
@@ -1342,10 +1703,52 @@ function insertFile(rel) {
   inp.dispatchEvent(new Event("input"));
 }
 
+/* ---------- what the upload folder holds ----------
+   Uploads land in ~/.claude-swap-backup/chat-uploads and stay there. The server
+   could always report and empty it, but nothing in the interface said so, so it
+   grew unseen. Deleting is two steps on purpose, and it drops the pending
+   attachment chips with it -- their `@paths` would otherwise point at files that
+   no longer exist. */
+
+const fmtMB = new Intl.NumberFormat("de-DE", { maximumFractionDigits: 1 });
+const fmtKB = new Intl.NumberFormat("de-DE", { maximumFractionDigits: 0 });
+const fmtBytes = (n) => n >= 1048576
+  ? fmtMB.format(n / 1048576) + " MB"
+  : fmtKB.format(n / 1024) + " KB";
+
+async function loadUploads() {
+  const line = $("uploadsLine");
+  line.textContent = "";
+  let d;
+  try { d = await (await api("/api/uploads")).json(); } catch { return; }
+  if (!d.count) return;
+
+  line.textContent = `Ablage: ${d.count} ${d.count === 1 ? "Datei" : "Dateien"} · `
+                   + `${fmtBytes(d.bytes || 0)} — `;
+  const btn = document.createElement("button");
+  btn.type = "button"; btn.className = "linkbtn"; btn.textContent = "löschen";
+  let armed = false;
+  btn.onclick = async () => {
+    if (!armed) {
+      armed = true;
+      btn.textContent = "wirklich alle löschen?";
+      setTimeout(() => { if (armed) { armed = false; btn.textContent = "löschen"; } }, 5000);
+      return;
+    }
+    btn.disabled = true;
+    try { await api("/api/uploads/clear", { method: "POST", body: "{}" }); }
+    catch (e) { addTurn("note bad", String(e)); }
+    clearChips();
+    loadUploads();
+  };
+  line.appendChild(btn);
+}
+
 $("attachBtn").addEventListener("click", () => {
   if (!$("attachPop").classList.contains("open")) return;
   $("fileSearch").value = "";
   loadFiles();
+  loadUploads();
   setTimeout(() => $("fileSearch").focus(), 0);
 });
 $("fileSearch").addEventListener("input", () => {
@@ -1380,6 +1783,7 @@ function renderChips() {
     c.appendChild(x);
     host.appendChild(c);
   });
+  syncSend();   // an attachment alone is enough to send
 }
 
 function clearChips() {
@@ -1471,13 +1875,23 @@ $("attachSlash").onclick = () => {
   inp.dispatchEvent(new Event("input"));
 };
 
-/* ---------- slash commands ----------
-   These are real: in print mode `/context` returns a report rather than an
-   echo, so the palette offers what the CLI itself listed for this directory. */
+/* ---------- the type-ahead palette ----------
+   Two things type-ahead above the composer, and from the keyboard they are the
+   same interaction, so they share one popover, one selection and one set of keys.
 
-let cmdAll = [];      // {name, description}
-let cmdHits = [];     // currently filtered
-let cmdIndex = 0;
+   A leading "/" offers the CLI's own commands. They are real: in print mode
+   `/context` returns a report rather than an echo, and the list comes from what
+   the CLI itself reported for this directory.
+
+   An "@" anywhere offers files from the working directory. That half is new. The
+   empty state has advertised "@" from the start, but typing one did nothing --
+   only the "+" menu could insert a file reference, so the interface was promising
+   an interaction it did not have. */
+
+let cmdAll = [];               // {name, description}, from the CLI
+let palRows = [];              // what is currently offered: {text, hint, apply}
+let palIndex = 0;
+let atTimer = 0;
 
 async function loadCommands() {
   try {
@@ -1497,68 +1911,138 @@ function commandPrefix() {
   return token;
 }
 
-function closeCmd() {
-  $("cmdPop").classList.remove("open");
-  cmdHits = [];
+/** The "@" token under the caret, or null. It may sit anywhere in the message,
+    so a file can be named mid-sentence rather than only at the start. */
+function filePrefix() {
+  const el = $("input");
+  const upto = el.value.slice(0, el.selectionStart ?? el.value.length);
+  const m = /(?:^|\s)@([^\s@]*)$/.exec(upto);
+  return m ? m[1] : null;
 }
 
-function renderCmd() {
-  const prefix = commandPrefix();
-  if (prefix === null || !cmdAll.length) { closeCmd(); return; }
-  const q = prefix.toLowerCase();
-  cmdHits = cmdAll.filter(c => c.name.toLowerCase().includes(q)).slice(0, 40);
-  if (!cmdHits.length) { closeCmd(); return; }
-  if (cmdIndex >= cmdHits.length) cmdIndex = 0;
+function palClose() {
+  clearTimeout(atTimer);
+  $("cmdPop").classList.remove("open");
+  palRows = [];
+}
 
+function palShow(rows, title) {
+  palRows = rows;
+  if (!rows.length) { $("cmdPop").classList.remove("open"); return; }
+  if (palIndex >= rows.length) palIndex = 0;
+  $("cmdTitle").textContent = title;
   const host = $("cmdItems");
   host.innerHTML = "";
-  cmdHits.forEach((c, i) => {
+  rows.forEach((r, i) => {
     const b = document.createElement("button");
     b.type = "button"; b.className = "cmd"; b.role = "option";
-    b.setAttribute("aria-selected", String(i === cmdIndex));
-    b.innerHTML = `<span class="n">/${esc(c.name)}</span>
-                   <span class="h">${esc(c.description || "")}</span>`;
-    b.onmousedown = (e) => { e.preventDefault(); pickCmd(i); };
+    b.setAttribute("aria-selected", String(i === palIndex));
+    b.innerHTML = `<span class="n">${esc(r.text)}</span>
+                   <span class="h">${esc(r.hint || "")}</span>`;
+    b.onmousedown = (e) => { e.preventDefault(); palPick(i); };
     host.appendChild(b);
   });
   closePops("cmdPop");
   $("cmdPop").classList.add("open");
-  host.children[cmdIndex]?.scrollIntoView({ block: "nearest" });
+  host.children[palIndex]?.scrollIntoView({ block: "nearest" });
 }
 
-function pickCmd(i) {
-  const c = cmdHits[i];
-  if (!c) return;
-  // Insert, do not send: a command usually wants an argument, and the app
-  // behaves the same way.
-  $("input").value = "/" + c.name + " ";
-  closeCmd();
+/** Move the selection without rebuilding the list. Arrow keys used to re-render
+    every row, which for a forty-file list meant discarding and rebuilding forty
+    buttons per keypress. */
+function palMove(by) {
+  if (!palRows.length) return;
+  palIndex = (palIndex + by + palRows.length) % palRows.length;
+  const host = $("cmdItems");
+  [...host.children].forEach((el, i) =>
+    el.setAttribute("aria-selected", String(i === palIndex)));
+  host.children[palIndex]?.scrollIntoView({ block: "nearest" });
+}
+
+function palPick(i) {
+  const row = palRows[i];
+  if (!row) return;
+  row.apply();
+  palClose();
   $("input").focus();
   $("input").dispatchEvent(new Event("input"));
 }
 
-$("input").addEventListener("input", () => { cmdIndex = 0; renderCmd(); });
-$("input").addEventListener("blur", () => setTimeout(closeCmd, 120));
+/** Swap the "@" token under the caret for the chosen path, leaving whatever
+    follows the caret untouched. */
+function insertAtToken(rel) {
+  const el = $("input");
+  const cut = el.selectionStart ?? el.value.length;
+  const rest = el.value.slice(cut);
+  // Only add the separating space when there is not already one -- completing a
+  // token in the middle of a sentence otherwise left a double space behind.
+  const gap = /^\s/.test(rest) ? "" : " ";
+  const before = el.value.slice(0, cut).replace(/@[^\s@]*$/, "@" + rel + gap);
+  el.value = before + rest;
+  el.setSelectionRange(before.length, before.length);
+}
+
+async function loadFileRows(token) {
+  let d;
+  try { d = await (await api("/api/files?q=" + encodeURIComponent(token))).json(); }
+  catch { return; }
+  // The caret may have moved on while the request was in flight; a list for a
+  // token that is no longer being typed is worse than none.
+  if (filePrefix() !== token) return;
+  const rows = (d.files || []).slice(0, 40)
+    .map(f => ({ text: "@" + f, hint: "", apply: () => insertAtToken(f) }));
+  palIndex = 0;
+  palShow(rows, rows.length < d.total
+    ? `Dateien — ${rows.length} von ${d.total}${d.capped ? "+" : ""}`
+    : "Dateien");
+}
+
+/** Decide which palette the field is asking for, and fill it. */
+function renderPalette() {
+  const cmd = commandPrefix();
+  if (cmd !== null) {
+    clearTimeout(atTimer);
+    const q = cmd.toLowerCase();
+    palShow(
+      cmdAll.filter(c => c.name.toLowerCase().includes(q)).slice(0, 40).map(c => ({
+        text: "/" + c.name,
+        hint: c.description || "",
+        // Insert, do not send: a command usually wants an argument, and the app
+        // behaves the same way.
+        apply: () => { $("input").value = "/" + c.name + " "; },
+      })),
+      "Befehle");
+    return;
+  }
+  const at = filePrefix();
+  if (at !== null) {
+    // Debounced, and the previous list stays up until the new one lands rather
+    // than blinking shut between keystrokes.
+    clearTimeout(atTimer);
+    atTimer = setTimeout(() => loadFileRows(at), 120);
+    return;
+  }
+  palClose();
+}
+
+$("input").addEventListener("input", () => { palIndex = 0; renderPalette(); });
+$("input").addEventListener("blur", () => setTimeout(palClose, 120));
 
 $("input").addEventListener("keydown", (e) => {
-  const open = $("cmdPop").classList.contains("open") && cmdHits.length;
-  if (open) {
-    if (e.key === "ArrowDown") {
-      e.preventDefault(); cmdIndex = (cmdIndex + 1) % cmdHits.length; renderCmd(); return;
-    }
-    if (e.key === "ArrowUp") {
-      e.preventDefault(); cmdIndex = (cmdIndex - 1 + cmdHits.length) % cmdHits.length; renderCmd(); return;
-    }
+  if ($("cmdPop").classList.contains("open") && palRows.length) {
+    if (e.key === "ArrowDown") { e.preventDefault(); palMove(1); return; }
+    if (e.key === "ArrowUp") { e.preventDefault(); palMove(-1); return; }
     if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
-      e.preventDefault(); pickCmd(cmdIndex); return;
+      e.preventDefault(); palPick(palIndex); return;
     }
-    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeCmd(); return; }
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); palClose(); return; }
   }
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("form").requestSubmit(); }
 });
 $("input").addEventListener("input", function () {
   this.style.height = "auto";
   this.style.height = Math.min(this.scrollHeight, 220) + "px";
+  syncSend();
 });
 
 $("newChat").onclick = () => {
@@ -1568,6 +2052,14 @@ $("newChat").onclick = () => {
   log.innerHTML = EMPTY_HTML;
   markActiveConv();
   clearChips();
+  // The running total belongs to the conversation on screen. Carrying it into a
+  // new one made the header claim a cost the new conversation had not incurred.
+  sessionCost = 0;
+  $("total").textContent = "";
+  warnedAt = {};
+  endStatus("");
+  closeRail();
+  scrollDown(true);
   $("input").focus();
 };
 
@@ -1704,13 +2196,20 @@ async function openConversation(id, cwd, limit) {
     log.appendChild(box);
   }
   for (const m of data.messages) {
-    if (m.role === "user") addTurn("user", m.text);
-    else addCopyButtons(addTurn("claude", m.text));
+    if (m.role === "user") { addTurn("user", m.text); continue; }
+    const b = addTurn("claude", m.text);
+    addCopyButtons(b);
+    addFoot(b, m.text, "");   // no cost is recorded for a stored turn, only the copy
   }
   if (!data.messages.length) addTurn("note", "Dieses Gespräch enthält keinen sichtbaren Verlauf.");
   sessionId = id;
   currentConv = { id, cwd };
   markActiveConv();
+  // The total on screen belongs to this conversation, and what an earlier one
+  // cost is not recorded in the transcript — so claim nothing.
+  sessionCost = 0;
+  $("total").textContent = "";
+  closeRail();          // on a narrow screen the list was covering the answer
   scrollDown(true);
   $("input").focus();
 }
@@ -1727,6 +2226,21 @@ function syncRailToggle() {
   const hidden = document.body.classList.contains("no-rail");
   $("railToggle").setAttribute("aria-pressed", String(!hidden));
 }
+
+/* Below 900px the rail is a drawer over the conversation. A drawer needs a way
+   out that is not the one small button it was opened from, and it should step
+   aside once it has done its job. */
+const railIsOverlay = () => innerWidth <= 900;
+
+function closeRail() {
+  if (!railIsOverlay() || document.body.classList.contains("no-rail")) return;
+  document.body.classList.add("no-rail");
+  localStorage.setItem("ui.rail", "off");
+  syncRailToggle();
+}
+
+$("railBack").onclick = closeRail;
+
 $("railToggle").onclick = () => {
   const hidden = document.body.classList.toggle("no-rail");
   localStorage.setItem("ui.rail", hidden ? "off" : "on");
@@ -1735,8 +2249,11 @@ $("railToggle").onclick = () => {
 };
 // Closed by default on a narrow viewport, where the rail overlays the
 // conversation — unless the user has explicitly turned it on before.
+// railIsOverlay(), not a second copy of the number: the CSS breakpoint is
+// max-width 900px, so at exactly 900 the rail *is* an overlay -- and a hardcoded
+// `< 900` here left it open on top of the conversation at that one width.
 if (localStorage.getItem("ui.rail") === "off"
-    || (innerWidth < 900 && localStorage.getItem("ui.rail") !== "on")) {
+    || (railIsOverlay() && localStorage.getItem("ui.rail") !== "on")) {
   document.body.classList.add("no-rail");
 }
 syncRailToggle();
@@ -1762,6 +2279,8 @@ document.addEventListener("keydown", (e) => {
 /* ---------- boot ---------- */
 
 syncPills();
+syncSend();
+syncJump();
 loadAccounts();   // the history list is loaded by setScope() above
 loadCommands();
 setAuto(localStorage.getItem("ui.auto") === "on");
